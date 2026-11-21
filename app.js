@@ -183,13 +183,38 @@ function finDaily(recs) {
   return out;
 }
 
+// Způsob dotazu na historii: WU u některých klíčů odmítá rozsah dat (chyba 400), proto se zkouší postupně
+// rozsah bez „date“, rozsah s „date“, týdenní úseky a nakonec jednotlivé dny. Funkční způsob se zapamatuje.
+const HMODES = ['range', 'range+date', 'week', 'day'];
+const HMODE_NAMES = { range: 'celý měsíc jedním dotazem', 'range+date': 'celý měsíc jedním dotazem (varianta 2)', week: 'po týdnech', day: 'po jednotlivých dnech' };
+async function histWith(mode, kind, first, end) {
+  const p = 'history/' + kind;
+  if (mode === 'range') return wuGet(p, { startDate: compact(first), endDate: compact(end) });
+  if (mode === 'range+date') return wuGet(p, { date: compact(first), startDate: compact(first), endDate: compact(end) });
+  const out = [];
+  for (let d = first; d <= end;) {
+    const e = mode === 'week' ? (addDays(d, 6) < end ? addDays(d, 6) : end) : d;
+    const r = mode === 'week' ? await wuGet(p, { startDate: compact(d), endDate: compact(e) }) : await wuGet(p, { date: compact(d) });
+    out.push(...r); d = addDays(e, 1);
+  }
+  return out;
+}
+async function wuHistory(kind, first, end) {
+  const key = 'meteo.hmode.' + kind;
+  let i = Math.max(0, HMODES.indexOf(LS.get(key, 'range'))), lastErr = null;
+  for (; i < HMODES.length; i++) {
+    try { const r = await histWith(HMODES[i], kind, first, end); LS.set(key, HMODES[i]); return r; }
+    catch (e) { lastErr = e; if (e.status !== 400) throw e; }
+  }
+  throw lastErr;
+}
+
 async function fetchMonthWU(kind, ymStr) {
   const [y, m] = ymStr.split('-').map(Number);
   const first = new Date(y, m - 1, 1), last = new Date(y, m, 0), t = today();
   const end = last > t ? t : last;
-  const s = compact(first), e = compact(end);
   let recs = [], err1 = null;
-  try { recs = (await wuGet('history/' + kind, { date: s, startDate: s, endDate: e })).map(o => norm(o, kind === 'daily')); }
+  try { recs = (await wuHistory(kind, first, end)).map(o => norm(o, kind === 'daily')); }
   catch (err) { err1 = err; if (/klíč|limit|dotaz/.test(err.message)) throw err; }
   if (dayDiff(end, t) <= 7) {
     try {
@@ -589,6 +614,14 @@ async function refresh() {
     const [h, d] = await Promise.all([needH ? getRange('hourly', p.s, p.e) : [], getRange('daily', p.s, p.e)]);
     return { p, h, d };
   };
+  setBusy(1);
+  // když načítání trvá, nenechávat v grafu data předchozího období
+  const ph = setTimeout(() => {
+    if (my !== seq) return;
+    model = null; current = null;
+    $('chart').innerHTML = '<div class="empty">Načítám data…<br>Starší období se stahují z Weather Underground, může to chvíli trvat.</div>';
+    $('summary').innerHTML = ''; $('info').innerHTML = '';
+  }, 250);
   try {
     const [A, B] = await Promise.all([load(pA), pB ? load(pB) : null]);
     if (my !== seq) return;
@@ -597,7 +630,7 @@ async function refresh() {
     if (my !== seq) return;
     model = null; current = null; showErr(err.message);
     $('chart').innerHTML = '<div class="empty">Data se nepodařilo načíst.</div>'; $('summary').innerHTML = ''; $('info').innerHTML = '';
-  }
+  } finally { clearTimeout(ph); setBusy(-1); }
 }
 
 function draw() {
@@ -730,7 +763,8 @@ function bindUI() {
   const open = () => {
     $('fStation').value = cfg.station; $('fWuKey').value = cfg.wuKey; $('fRepo').value = cfg.ghRepo || 'meteo-data'; $('fGhToken').value = cfg.ghToken;
     const q = LS.get('meteo.quota', { d: '', n: 0 });
-    $('quota').textContent = `Dotazů na Weather Underground dnes: ${q.d === ymd(today()) ? q.n : 0} (bezpečný limit 1400).`;
+    const hm = k => HMODE_NAMES[LS.get('meteo.hmode.' + k, '')] || 'zatím nezjištěno';
+    $('quota').textContent = `Dotazů na Weather Underground dnes: ${q.d === ymd(today()) ? q.n : 0} (bezpečný limit 1400).\nStahování historie – hodinová data: ${hm('hourly')}, denní souhrny: ${hm('daily')}.`;
     $('setMsg').textContent = ''; $('setMsg').className = 'msg'; $('settings').hidden = false;
   };
   $('btnSettings').onclick = open;
@@ -754,7 +788,7 @@ function bindUI() {
       catch (err) { ok = false; cfg.ghOwner = ''; lines.push('✗ GitHub: ' + err.message); }
     } else lines.push('GitHub není nastavený, data se ukládají jen v tomto telefonu.');
     LS.set('meteo.cfg', cfg);
-    if (stationChanged) await idb.clear();
+    if (stationChanged) { await idb.clear(); LS.del('meteo.hmode.hourly'); LS.del('meteo.hmode.daily'); }
     msg.textContent = lines.join('\n'); msg.className = 'msg ' + (ok ? 'ok' : 'bad');
     renderCurrent();
     if (ok) setTimeout(() => { $('settings').hidden = true; }, 1200);
