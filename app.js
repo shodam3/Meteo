@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 7;
+const APP_VERSION = 8;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -526,7 +526,10 @@ function drawChart(el, o) {
     for (const v of s.vals) if (v != null) all.push(v);
     if (s.band) for (const b of s.band) if (b) { if (b[0] != null) all.push(b[0]); if (b[1] != null) all.push(b[1]); }
   }
-  if (!all.length) { el.innerHTML = '<div class="empty">Pro toto období nejsou žádná data.</div>'; return null; }
+  // měřítko osy se počítá ze všech hodnot (max, min i průměr), aby se při přepínání neměnilo
+  const hasData = all.length > 0;
+  if (o.extra) for (const v of o.extra) if (v != null) all.push(v);
+  if (!hasData) { el.innerHTML = '<div class="empty">Pro toto období nejsou žádná data.</div>'; return null; }
   let mn = all[0], mx = all[0]; for (const v of all) { if (v < mn) mn = v; if (v > mx) mx = v; }
   const sc = nice(mn, mx, o.zero);
   const L = 36, R = 6, Bm = 22, n = o.n, slot = (W - L - R) / n;
@@ -678,6 +681,12 @@ async function refresh() {
   } finally { clearTimeout(ph); setBusy(-1); }
 }
 
+function extraVals(a, b) {
+  if (VARS[st.v].kind === 'sum') return null;
+  const out = [];
+  for (const X of [a, b]) if (X) for (const x of X.vals) out.push(x.hi, x.lo);
+  return out;
+}
 function draw() {
   if (!model) return;
   const { A, B } = model, type = chartType(), V = VARS[st.v];
@@ -689,7 +698,7 @@ function draw() {
   const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, x.lo])) : null }];
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
   if (st.sel != null && st.sel >= n) st.sel = null;
-  const geo = drawChart($('chart'), { type, n, series, zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(A.p).t}` });
+  const geo = drawChart($('chart'), { type, n, series, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(A.p).t}` });
   current = { a, b, geo };
   renderInfo(); renderSummary();
 }
@@ -702,7 +711,7 @@ function drawGraphOnly() {
   const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
   const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, x.lo])) : null }];
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
-  current.geo = drawChart($('chart'), { type, n, series, zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` });
+  current.geo = drawChart($('chart'), { type, n, series, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` });
   renderInfo();
 }
 
