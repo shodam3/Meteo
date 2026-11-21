@@ -1,4 +1,6 @@
 'use strict';
+const APP_VERSION = 5;
+let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
 // ---------- pomocné funkce ----------
@@ -365,7 +367,10 @@ async function applyRain5(hourly) {
   const days = [...new Set(hourly.map(r => r.d))];
   const res = await Promise.all(days.map(d => rain5(d)));
   const m = new Map(days.map((d, i) => [d, res[i]]));
-  for (const r of hourly) { const hs = m.get(r.d); if (hs && hs[r.h] != null) r.rain = hs[r.h]; }
+  let used = 0;
+  for (const r of hourly) { const hs = m.get(r.d); if (hs && hs[r.h] != null) { r.rain = hs[r.h]; used++; } }
+  const okDays = res.filter(Boolean).length;
+  rainSrc = okDays ? `Srážky po hodinách spočteny z podrobných měření (${okDays} ${okDays === 1 ? 'den' : okDays < 5 ? 'dny' : 'dní'}, ${used} hodin).` : 'Podrobná měření nejsou k dispozici, srážky po hodinách jsou z hodinových dat WU.';
   return hourly;
 }
 
@@ -719,7 +724,8 @@ function renderSummary() {
   if (!B) {
     const items = summary(st.v, st.scale, A.h, A.d);
     if (!A.d.length && !A.h.length) { el.innerHTML = '<p class="note">Pro toto období nejsou žádná data.</p>'; return; }
-    el.innerHTML = '<div class="tiles">' + items.map(it => `<div class="st"><span class="l">${esc(it.l)}</span><span class="v ${it.cls || ''}">${fmt(it.val, it.dec)}${it.val != null && it.u ? ' ' + esc(it.u) : ''}</span><span class="n">${esc(it.at ? fmtAt(it.at, st.scale) : (it.n || ''))}</span></div>`).join('') + '</div>';
+    const src = st.v === 'rain' && (st.scale === 'day' || st.scale === 'week') && rainSrc ? `<p class="note" style="margin:10px 0 0">${esc(rainSrc)}</p>` : '';
+    el.innerHTML = '<div class="tiles">' + items.map(it => `<div class="st"><span class="l">${esc(it.l)}</span><span class="v ${it.cls || ''}">${fmt(it.val, it.dec)}${it.val != null && it.u ? ' ' + esc(it.u) : ''}</span><span class="n">${esc(it.at ? fmtAt(it.at, st.scale) : (it.n || ''))}</span></div>`).join('') + '</div>' + src;
     return;
   }
   const cut = Math.min(elapsedCut(A.p), elapsedCut(B.p));
@@ -807,7 +813,7 @@ function bindUI() {
     $('fStation').value = cfg.station; $('fWuKey').value = cfg.wuKey; $('fRepo').value = cfg.ghRepo || 'meteo-data'; $('fGhToken').value = cfg.ghToken;
     const q = LS.get('meteo.quota', { d: '', n: 0 });
     const hm = k => HMODE_NAMES[LS.get('meteo.hmode.' + k, '')] || 'zatím nezjištěno';
-    $('quota').textContent = `Dotazů na Weather Underground dnes: ${q.d === ymd(today()) ? q.n : 0} (bezpečný limit 1400).\nStahování historie – hodinová data: ${hm('hourly')}, denní souhrny: ${hm('daily')}.`;
+    $('quota').textContent = `Dotazů na Weather Underground dnes: ${q.d === ymd(today()) ? q.n : 0} (bezpečný limit 1400).\nStahování historie – hodinová data: ${hm('hourly')}, denní souhrny: ${hm('daily')}.\nVerze aplikace: ${APP_VERSION}`;
     $('setMsg').textContent = ''; $('setMsg').className = 'msg'; $('settings').hidden = false;
   };
   $('btnSettings').onclick = open;
