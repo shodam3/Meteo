@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 11;
+const APP_VERSION = 12;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -791,7 +791,7 @@ function renderStatus() {
   }
   if (!warn && s.dataset.note) txt = s.dataset.note;
   const t = today(), dt = `${DOWL[t.getDay()]} ${t.getDate()}. ${t.getMonth() + 1}. ${t.getFullYear()}`;
-  s.innerHTML = `<span class="today">Dnes ${esc(dt)}</span>` + (txt ? ' · ' + esc(txt) : ''); s.classList.toggle('warn', warn);
+  s.innerHTML = `<span class="today">${esc(dt.charAt(0).toUpperCase() + dt.slice(1))}</span>` + (txt ? ' · ' + esc(txt) : ''); s.classList.toggle('warn', warn);
 }
 async function loadCurrent() {
   try { const o = (await wuGet('observations/current'))[0]; if (o) { cur = o; renderCurrent(); } }
