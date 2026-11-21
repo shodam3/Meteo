@@ -330,6 +330,45 @@ async function loadMonth(kind, ymStr) {
     throw err;
   } finally { setBusy(-1); }
 }
+// Přesné hodinové srážky z podrobných měření (history/all, jen po dnech). Hodinová data WU totiž udávají
+// úhrn od půlnoci k okamžiku, který neleží přesně na konci hodiny, takže se déšť posouvá mezi hodinami.
+const r5inflight = new Map();
+function rain5(d) {
+  if (r5inflight.has(d)) return r5inflight.get(d);
+  const p = rain5load(d).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
+}
+async function rain5load(d) {
+  const key = 'rain5/' + d, e = await idb.get(key);
+  if (e && (e.final || Date.now() - e.fetchedAt < STALE)) return e.hours;
+  setBusy(1);
+  try {
+    const obs = await wuGet('history/all', { date: d.replace(/-/g, '') });
+    const pts = obs.map(o => ({ t: String(o.obsTimeLocal || ''), c: num((o.metric || {}).precipTotal) }))
+      .filter(x => x.t.startsWith(d) && x.c != null);
+    let hours = null;
+    if (pts.length) {
+      const end = new Array(24).fill(null); let last = -1;
+      for (const x of pts) { const h = Number(x.t.slice(11, 13)); if (!(h >= 0 && h < 24)) continue; end[h] = end[h] == null ? x.c : Math.max(end[h], x.c); if (h > last) last = h; }
+      hours = new Array(24).fill(null); let prev = 0;
+      for (let h = 0; h <= last; h++) {
+        if (end[h] == null) { hours[h] = 0; continue; }
+        hours[h] = r2(Math.max(0, end[h] - prev)); prev = Math.max(prev, end[h]);
+      }
+    }
+    const final = Date.now() > addDays(parseYmd(d), 1).getTime() + 3600e3;
+    await idb.set(key, { final, fetchedAt: Date.now(), hours });
+    return hours;
+  } catch (err) { note('Srážky po hodinách: ' + err.message); return e ? e.hours : null; }
+  finally { setBusy(-1); }
+}
+async function applyRain5(hourly) {
+  const days = [...new Set(hourly.map(r => r.d))];
+  const res = await Promise.all(days.map(d => rain5(d)));
+  const m = new Map(days.map((d, i) => [d, res[i]]));
+  for (const r of hourly) { const hs = m.get(r.d); if (hs && hs[r.h] != null) r.rain = hs[r.h]; }
+  return hourly;
+}
+
 async function getRange(kind, s, e) {
   const months = [];
   for (let d = new Date(s.getFullYear(), s.getMonth(), 1); d < e; d = addMonths(d, 1)) months.push(ymOf(d));
@@ -611,7 +650,7 @@ async function refresh() {
   const pA = periodOf(st.scale, st.anchor), pB = st.cmp ? periodOf(st.scale, st.cmp) : null;
   const needH = st.scale === 'day' || st.scale === 'week';
   const load = async p => {
-    const [h, d] = await Promise.all([needH ? getRange('hourly', p.s, p.e) : [], getRange('daily', p.s, p.e)]);
+    const [h, d] = await Promise.all([needH ? getRange('hourly', p.s, p.e).then(x => st.v === 'rain' ? applyRain5(x) : x) : [], getRange('daily', p.s, p.e)]);
     return { p, h, d };
   };
   setBusy(1);
@@ -740,7 +779,11 @@ function navigate(which, d) {
   st.sel = null; refresh();
 }
 function bindUI() {
-  $('vars').addEventListener('click', e => { const b = e.target.closest('[data-v]'); if (!b) return; st.v = b.dataset.v; st.sel = null; saveView(); renderControls(); draw(); });
+  $('vars').addEventListener('click', e => {
+    const b = e.target.closest('[data-v]'); if (!b) return;
+    st.v = b.dataset.v; st.sel = null; saveView();
+    if (st.v === 'rain' && (st.scale === 'day' || st.scale === 'week')) refresh(); else { renderControls(); draw(); }
+  });
   $('scales').addEventListener('click', e => { const b = e.target.closest('[data-s]'); if (!b || b.dataset.s === st.scale) return; st.scale = b.dataset.s; st.sel = null; saveView(); refresh(); });
   $('types').addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; st.charts[st.v] = b.dataset.t; st.sel = null; saveView(); renderControls(); draw(); });
   $('modes').addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (!b) return; st.mode = b.dataset.m; saveView(); renderControls(); draw(); });
