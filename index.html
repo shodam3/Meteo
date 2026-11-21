@@ -12,7 +12,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-192.png">
 <style>
-:root{--bg:#F4F5F7;--card:#FFFFFF;--line:#E5E7EB;--line2:#D1D5DB;--tx:#111827;--mu:#4B5563;--a:#1D4ED8;--b:#C2410C;--warm:#C2410C;--cold:#1D4ED8;--ok:#047857;--bad:#B91C1C}
+:root{--bg:#F4F5F7;--card:#FFFFFF;--line:#E5E7EB;--line2:#D1D5DB;--tx:#111827;--mu:#4B5563;--a:#1D4ED8;--b:#C2410C;--warm:#C2410C;--cold:#1D4ED8;--ok:#047857;--ca:#0E7490;--bad:#B91C1C}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--tx);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
 button,input{font:inherit;color:inherit}
@@ -42,23 +42,26 @@ h1{margin:0;font-size:22px;font-weight:700}
 .seg.s2{grid-template-columns:repeat(2,44px)}
 .seg.small button{height:34px;font-size:13px}
 .nav{display:flex;align-items:center;justify-content:space-between;gap:6px}
-.nav.boxed{background:var(--card);border-radius:14px;padding:5px;border:2px solid var(--a)}
+.nav.boxed{background:var(--card);border-radius:14px;padding:5px;border:2px solid var(--ca)}
 .nav.boxed.b{border-color:var(--b)}
 .nav .mid{display:flex;flex-direction:column;align-items:center;gap:1px;text-align:center;min-width:0}
+.nav .pick{border:none;background:transparent;padding:4px 8px;border-radius:10px;min-height:44px;justify-content:center}
+.nav .pick:active{background:rgba(0,0,0,.05)}
 .nav .t{font-size:16px;font-weight:600}
 .nav .s{font-size:12px;color:var(--mu);min-height:15px}
 .nav.boxed .iconbtn{border:none;background:var(--bg)}
-.leg{display:inline-block;width:20px;height:0;border-top:3px solid var(--a);vertical-align:middle;margin-right:6px}
+.leg{display:inline-block;width:20px;height:0;border-top:3px solid #10BCD3;vertical-align:middle;margin-right:6px}
 .leg.b{border-top:3px dashed var(--b)}
 .card{background:var(--card);border-radius:16px;padding:12px}
 .charthead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
-#chart{width:100%;touch-action:pan-y;user-select:none;-webkit-user-select:none}
-#chart svg{display:block}
+#chart{width:100%;touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+#chart.scrub{touch-action:none}
+#chart svg{display:block;pointer-events:none}
 .empty{height:220px;display:flex;align-items:center;justify-content:center;color:var(--mu);font-size:14px;text-align:center;padding:0 20px}
 .info{font-size:13px;margin-top:6px;min-height:38px;display:flex;align-items:center;justify-content:space-between;gap:8px}
 .info .hint{color:var(--mu);font-size:12px;text-align:center;width:100%}
 .info .il{line-height:1.35}
-.info .il.a b{color:var(--a)}
+.info .il.a b{color:var(--ca)}
 .info .il.b b{color:var(--b)}
 .muted{color:var(--mu)}
 .drill{flex:none;height:36px;padding:0 12px;border-radius:10px;border:1px solid var(--line2);background:#fff;font-size:13px;font-weight:600}
@@ -78,7 +81,7 @@ table.cmp{width:100%;border-collapse:collapse;font-size:13px}
 table.cmp th{font-size:12px;text-align:right;padding:0 0 6px;font-weight:700}
 table.cmp th:first-child,table.cmp td:first-child{text-align:left;color:var(--mu);font-weight:400}
 table.cmp td{text-align:right;padding:6px 0;border-top:1px solid var(--line);font-weight:600;white-space:nowrap}
-table.cmp th.a{color:var(--a)}
+table.cmp th.a{color:var(--ca)}
 table.cmp th.b{color:var(--b)}
 .note{font-size:12px;color:var(--mu);margin:0 0 8px}
 .err{background:#FEF2F2;color:var(--bad);border-radius:12px;padding:10px 12px;font-size:13px}
@@ -93,6 +96,14 @@ input[type=text],input[type=password]{height:44px;border-radius:10px;border:1px 
 .msg{font-size:13px;white-space:pre-line}
 .msg.ok{color:var(--ok)}
 .msg.bad{color:var(--bad)}
+.wheels{position:relative;display:flex;gap:6px;height:200px;background:#fff;border-radius:14px;padding:0 8px;overflow:hidden}
+.wheels::before{content:"";position:absolute;left:8px;right:8px;top:80px;height:40px;background:var(--bg);border-radius:10px;pointer-events:none}
+.wheel{position:relative;flex:1;height:200px;overflow-y:auto;scroll-snap-type:y mandatory;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.wheel.wide{flex:2.2}
+.wheel::-webkit-scrollbar{display:none}
+.wpad{height:80px}
+.witem{height:40px;line-height:40px;text-align:center;scroll-snap-align:start;font-size:16px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.witem.on{color:var(--tx);font-weight:700}
 fieldset{border:none;margin:0;padding:12px;background:#fff;border-radius:14px;display:flex;flex-direction:column;gap:10px}
 legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bottom:2px}
 </style>
@@ -173,6 +184,14 @@ legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bot
 </div>
 </div>
 
-<script src="app.js?v=6"></script>
+<div class="sheet" id="picker" hidden>
+<div class="panel" role="dialog" aria-modal="true" aria-labelledby="pkTitle">
+<h2 id="pkTitle" style="font-size:18px">Vybrat období</h2>
+<div class="wheels" id="pkWheels"></div>
+<div class="row" style="justify-content:flex-end"><button class="btn" id="pkCancel">Zrušit</button><button class="btn solid" id="pkOk">Vybrat</button></div>
+</div>
+</div>
+
+<script src="app.js?v=7"></script>
 </body>
 </html>

@@ -1,6 +1,5 @@
 'use strict';
-const APP_VERSION = 6;
-const rawPts = new Map();
+const APP_VERSION = 7;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -342,7 +341,7 @@ function rain5(d) {
 }
 async function rain5load(d) {
   const key = 'rain5b/' + d, e = await idb.get(key);
-  if (e && (e.final || Date.now() - e.fetchedAt < STALE)) { rawPts.set(d, e.pts || []); return e.hours; }
+  if (e && (e.final || Date.now() - e.fetchedAt < STALE)) return e.hours;
   setBusy(1);
   try {
     const obs = await wuGet('history/all', { date: d.replace(/-/g, '') });
@@ -359,9 +358,7 @@ async function rain5load(d) {
       }
     }
     const final = Date.now() > addDays(parseYmd(d), 1).getTime() + 3600e3;
-    const raw = obs.map(o => [String(o.obsTimeLocal || '').slice(0, 19), num((o.metric || {}).precipTotal), o.epoch || null]);
-    rawPts.set(d, raw);
-    await idb.set(key, { final, fetchedAt: Date.now(), hours, pts: raw });
+    await idb.set(key, { final, fetchedAt: Date.now(), hours });
     return hours;
   } catch (err) { note('Srážky po hodinách: ' + err.message); return e ? e.hours : null; }
   finally { setBusy(-1); }
@@ -546,7 +543,8 @@ function drawChart(el, o) {
   const f1 = x => Math.round(x * 10) / 10;
   let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.aria || 'Graf')}">`;
   s += `<defs><linearGradient id="gA" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34E89E"/><stop offset="0.55" stop-color="#3EE6F2"/><stop offset="1" stop-color="#38BDF8"/></linearGradient>`
-    + `<linearGradient id="gB" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FDBA74"/><stop offset="1" stop-color="#EA580C"/></linearGradient></defs>`;
+    + `<linearGradient id="gB" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FDBA74"/><stop offset="1" stop-color="#EA580C"/></linearGradient>`
+    + `<linearGradient id="gL" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#14C07C"/><stop offset="0.55" stop-color="#10BCD3"/><stop offset="1" stop-color="#1D8FE0"/></linearGradient></defs>`;
   if (o.type === 'bar') for (let i = 0; i < n; i += 2) s += `<rect x="${f1(L + slot * i)}" y="${T}" width="${f1(slot)}" height="${f1(plotH)}" fill="#F5F6F8"/>`;
   s += '<g font-size="10" fill="#4B5563" font-family="inherit">';
   for (const t of sc.ticks) {
@@ -573,7 +571,7 @@ function drawChart(el, o) {
     if (lab) {
       s += '<g font-size="9" font-weight="600" fill="#A21CAF" font-family="inherit">';
       o.series[0].vals.forEach((v, i) => {
-        if (v == null) return; const top = f1(Math.min(y(v), base - 1) - 3);
+        if (v == null || Number(v.toFixed(o.dec)) === 0) return; const top = f1(Math.min(y(v), base - 1) - 3);
         s += lab === 'h' ? `<text x="${f1(xc(i))}" y="${top}" text-anchor="middle">${txt[i]}</text>`
           : `<text transform="translate(${f1(xc(i) + 3)},${top}) rotate(-90)">${txt[i]}</text>`;
       });
@@ -581,11 +579,11 @@ function drawChart(el, o) {
     }
   } else {
     o.series.forEach((se, k) => {
-      const col = k === 0 ? '#1D4ED8' : '#C2410C';
+      const col = k === 0 ? 'url(#gL)' : '#C2410C';
       if (se.band) {
         let seg = [];
         const flush = () => {
-          if (seg.length > 1) s += `<polygon fill="${col}" fill-opacity="0.12" points="${seg.map(([i, h]) => f1(xc(i)) + ',' + f1(y(h))).join(' ')} ${seg.slice().reverse().map(([i, , l]) => f1(xc(i)) + ',' + f1(y(l))).join(' ')}"/>`;
+          if (seg.length > 1) s += `<polygon fill="url(#gA)" fill-opacity="0.22" points="${seg.map(([i, h]) => f1(xc(i)) + ',' + f1(y(h))).join(' ')} ${seg.slice().reverse().map(([i, , l]) => f1(xc(i)) + ',' + f1(y(l))).join(' ')}"/>`;
           seg = [];
         };
         se.band.forEach((b, i) => { if (b && b[0] != null && b[1] != null) seg.push([i, b[0], b[1]]); else flush(); }); flush();
@@ -601,7 +599,7 @@ function drawChart(el, o) {
   }
   if (o.sel != null && o.sel < n) {
     s += `<line x1="${f1(xc(o.sel))}" y1="${T}" x2="${f1(xc(o.sel))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-opacity="0.5"/>`;
-    if (o.type === 'line') o.series.forEach((se, k) => { const v = se.vals[o.sel]; if (v != null) s += `<circle cx="${f1(xc(o.sel))}" cy="${f1(y(v))}" r="4" fill="#fff" stroke="${k ? '#C2410C' : '#1D4ED8'}" stroke-width="2"/>`; });
+    if (o.type === 'line') o.series.forEach((se, k) => { const v = se.vals[o.sel]; if (v != null) s += `<circle cx="${f1(xc(o.sel))}" cy="${f1(y(v))}" r="4" fill="#fff" stroke="${k ? '#C2410C' : '#10A9C4'}" stroke-width="2"/>`; });
   }
   s += '</svg>';
   el.innerHTML = s;
@@ -642,7 +640,7 @@ function renderControls() {
     const leg = st.cmp ? `<span class="leg${which === 'b' ? ' b' : ''}"></span>` : '';
     return `<div class="nav${boxed}">
 <button class="iconbtn" data-nav="${which}" data-d="-1" aria-label="Předchozí období"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
-<div class="mid"><span class="t">${leg}${esc(lb.t)}</span><span class="s">${esc(lb.s)}</span></div>
+<button class="mid pick" data-pick="${which}" aria-label="Vybrat období"><span class="t">${leg}${esc(lb.t)}<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="margin-left:6px;vertical-align:middle;opacity:.6"><path d="M6 9l6 6 6-6"/></svg></span><span class="s">${esc(lb.s)}</span></button>
 <button class="iconbtn" data-nav="${which}" data-d="1" aria-label="Následující období"${nextDis ? ' disabled' : ''}><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></button>
 </div>`;
   };
@@ -695,10 +693,22 @@ function draw() {
   current = { a, b, geo };
   renderInfo(); renderSummary();
 }
+// při posouvání prstem se překresluje jen graf a řádek s hodnotami
+function drawGraphOnly() {
+  if (!current || !model) return;
+  const { a, b } = current, type = chartType(), V = VARS[st.v];
+  const n = Math.max(a.Bk.length, b ? b.Bk.length : 0);
+  const padTo = arr => { const r = arr.slice(); while (r.length < n) r.push(null); return r; };
+  const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
+  const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, x.lo])) : null }];
+  if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
+  current.geo = drawChart($('chart'), { type, n, series, zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` });
+  renderInfo();
+}
 
 function renderInfo() {
   const el = $('info'), c = current, V = VARS[st.v];
-  if (!c || !c.geo || st.sel == null) { el.innerHTML = '<span class="hint">Klepnutím do grafu zobrazíte hodnoty · přejetím prstem do strany změníte období</span>'; return; }
+  if (!c || !c.geo || st.sel == null) { el.innerHTML = '<span class="hint">Podržte prst na grafu a posouváním zobrazíte hodnoty · rychlým přejetím do strany změníte období</span>'; return; }
   const i = st.sel;
   const line = (X, cls) => {
     const bk = X.Bk[i]; if (!bk) return '';
@@ -708,14 +718,8 @@ function renderInfo() {
     return `<div class="il ${cls}">${t}</div>`;
   };
   const bk = c.a.Bk[i];
-  let raw = '';
-  if (st.v === 'rain' && bk && bk.k === 'h' && rawPts.has(bk.d)) {
-    const hh = pad(bk.h), prevH = pad(bk.h - 1 < 0 ? 0 : bk.h - 1);
-    const pts = rawPts.get(bk.d).filter(x => { const h = String(x[0]).slice(11, 13); return h === hh || h === prevH; });
-    raw = `<div class="muted" style="font-size:11px;margin-top:4px">Měření WU: ${pts.map(x => esc(String(x[0]).slice(11, 16)) + ' ' + fmt(x[1], 2)).join(' · ') || 'žádná'}</div>`;
-  }
   const drill = bk && (bk.k === 'd' || bk.k === 'm') ? `<button class="drill" id="btnDrill">${bk.k === 'd' ? 'Den' : 'Měsíc'} ›</button>` : '';
-  el.innerHTML = `<div>${line(c.a, 'a')}${c.b ? line(c.b, 'b') : ''}${raw}</div>${drill}`;
+  el.innerHTML = `<div>${line(c.a, 'a')}${c.b ? line(c.b, 'b') : ''}</div>${drill}`;
   if (drill) $('btnDrill').onclick = () => {
     const toDate = x => x.k === 'd' ? parseYmd(x.d) : parseYmd(x.m + '-01');
     const bb = c.b && c.b.Bk[i];
@@ -784,6 +788,71 @@ async function loadCurrent() {
   catch (err) { note(err.message); }
 }
 
+// ---------- výběr období rolovacími kolečky ----------
+const ROW = 40;
+function weeksInYear(y) { return isoWeek(new Date(y, 11, 28)); }
+function isoMonday(y, w) { const j4 = new Date(y, 0, 4); return addDays(j4, -((j4.getDay() + 6) % 7) + 7 * (w - 1)); }
+function isoYear(d) { return addDays(d, 3 - ((d.getDay() + 6) % 7)).getFullYear(); }
+function makeWheel(el, items, idx, onSettle) {
+  const w = { el, items, idx, onSettle };
+  const render = () => {
+    el.innerHTML = '<div class="wpad"></div>' + w.items.map((it, i) => `<div class="witem${i === w.idx ? ' on' : ''}" data-i="${i}">${esc(it.l)}</div>`).join('') + '<div class="wpad"></div>';
+    el.scrollTop = w.idx * ROW;
+  };
+  let t = null;
+  el.onscroll = () => {
+    clearTimeout(t);
+    t = setTimeout(() => {
+      const i = Math.max(0, Math.min(w.items.length - 1, Math.round(el.scrollTop / ROW)));
+      if (Math.abs(el.scrollTop - i * ROW) > 1) el.scrollTo({ top: i * ROW, behavior: 'smooth' });
+      if (i !== w.idx) { w.idx = i; for (const c of el.querySelectorAll('.witem')) c.classList.toggle('on', Number(c.dataset.i) === i); w.onSettle && w.onSettle(); }
+    }, 110);
+  };
+  el.onclick = e => { const c = e.target.closest('.witem'); if (c) el.scrollTo({ top: Number(c.dataset.i) * ROW, behavior: 'smooth' }); };
+  w.set = (items, idx) => { w.items = items; w.idx = Math.max(0, Math.min(items.length - 1, idx)); render(); };
+  w.val = () => w.items[w.idx].v;
+  render(); return w;
+}
+function openPicker(which) {
+  const a = which === 'b' ? st.cmp : st.anchor, t = today(), ty = t.getFullYear(), sc = st.scale;
+  const years = []; for (let y = 2000; y <= ty; y++) years.push({ v: y, l: String(y) });
+  const box = $('pkWheels'); box.innerHTML = '';
+  const col = cls => { const d = document.createElement('div'); d.className = 'wheel ' + (cls || ''); box.appendChild(d); return d; };
+  $('pkTitle').textContent = which === 'b' ? 'Srovnávané období' : (st.cmp ? 'První období' : 'Vybrat období');
+  let get;
+  if (sc === 'year') {
+    const wy = makeWheel(col(), years, a.getFullYear() - 2000);
+    get = () => new Date(wy.val(), 0, 1);
+  } else if (sc === 'month') {
+    const wm = makeWheel(col('wide'), MONL.map((m, i) => ({ v: i, l: m })), a.getMonth());
+    const wy = makeWheel(col(), years, a.getFullYear() - 2000);
+    get = () => new Date(wy.val(), wm.val(), 1);
+  } else if (sc === 'week') {
+    const iy = isoYear(a);
+    const weekItems = y => { const r = []; for (let w = 1; w <= weeksInYear(y); w++) { const m = isoMonday(y, w), e = addDays(m, 6); r.push({ v: w, l: `${w}. týden · ${m.getDate()}. ${m.getMonth() + 1}.–${e.getDate()}. ${e.getMonth() + 1}.` }); } return r; };
+    let wy;
+    const ww = makeWheel(col('wide'), weekItems(iy), isoWeek(a) - 1);
+    wy = makeWheel(col(), years, Math.min(iy, ty) - 2000, () => ww.set(weekItems(wy.val()), ww.idx));
+    get = () => isoMonday(wy.val(), ww.val());
+  } else {
+    const dayItems = (y, m) => { const r = []; const n = new Date(y, m + 1, 0).getDate(); for (let d = 1; d <= n; d++) r.push({ v: d, l: `${d}. ${DOW[new Date(y, m, d).getDay()]}` }); return r; };
+    let wm, wy;
+    const wd = makeWheel(col(), dayItems(a.getFullYear(), a.getMonth()), a.getDate() - 1);
+    const upd = () => wd.set(dayItems(wy.val(), wm.val()), wd.idx);
+    wm = makeWheel(col('wide'), MONL.map((m, i) => ({ v: i, l: m })), a.getMonth(), () => upd());
+    wy = makeWheel(col(), years, a.getFullYear() - 2000, () => upd());
+    get = () => clampDay(wy.val(), wm.val(), wd.val());
+  }
+  $('pkOk').onclick = () => {
+    let d = get(); if (d > t) d = t;
+    if (which === 'b') st.cmp = d; else st.anchor = d;
+    $('picker').hidden = true; st.sel = null; refresh();
+  };
+  $('picker').hidden = false;
+  // po zobrazení znovu nastavit polohy koleček (skryté prvky nemají rozměry)
+  for (const w of box.querySelectorAll('.wheel')) { const on = w.querySelector('.witem.on'); if (on) w.scrollTop = Number(on.dataset.i) * ROW; }
+}
+
 // ---------- ovládání ----------
 function navigate(which, d) {
   if (which === 'a' || which === 'both') st.anchor = shift(st.scale, st.anchor, d);
@@ -802,19 +871,47 @@ function bindUI() {
   $('scales').addEventListener('click', e => { const b = e.target.closest('[data-s]'); if (!b || b.dataset.s === st.scale) return; st.scale = b.dataset.s; st.sel = null; saveView(); refresh(); });
   $('types').addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; st.charts[st.v] = b.dataset.t; st.sel = null; saveView(); renderControls(); draw(); });
   $('modes').addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (!b) return; st.mode = b.dataset.m; saveView(); renderControls(); draw(); });
-  $('navs').addEventListener('click', e => { const b = e.target.closest('[data-nav]'); if (!b || b.disabled) return; navigate(b.dataset.nav, Number(b.dataset.d)); });
-  $('btnCmp').onclick = () => { st.cmp = st.cmp ? null : yearAgo(st.anchor); st.sel = null; refresh(); };
-  const ch = $('chart'); let down = null;
-  ch.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY, t: Date.now() }; });
-  ch.addEventListener('pointerup', e => {
-    if (!down) return; const dx = e.clientX - down.x, dy = e.clientY - down.y, dt = Date.now() - down.t; down = null;
-    if (Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy) && dt < 800) { navigate('both', dx > 0 ? -1 : 1); return; }
-    if (Math.abs(dx) > 12 || Math.abs(dy) > 12 || !current || !current.geo) return;
-    const r = ch.getBoundingClientRect(), g = current.geo;
-    const i = Math.floor((e.clientX - r.left - g.L) / g.slot);
-    st.sel = i >= 0 && i < g.n && st.sel !== i ? i : null; draw();
+  $('navs').addEventListener('click', e => {
+    const pk = e.target.closest('[data-pick]'); if (pk) { openPicker(pk.dataset.pick); return; }
+    const b = e.target.closest('[data-nav]'); if (!b || b.disabled) return; navigate(b.dataset.nav, Number(b.dataset.d));
   });
-  ch.addEventListener('pointercancel', () => { down = null; });
+  $('pkCancel').onclick = () => { $('picker').hidden = true; };
+  $('picker').addEventListener('click', e => { if (e.target === $('picker')) $('picker').hidden = true; });
+  $('btnCmp').onclick = () => { st.cmp = st.cmp ? null : yearAgo(st.anchor); st.sel = null; refresh(); };
+  // graf: podržení prstu = svislá čára s hodnotami, kterou lze posouvat; rychlé přejetí do strany = jiné období; klepnutí = skrýt čáru
+  const ch = $('chart'); let press = null, lastTouch = 0;
+  const selectAt = x => {
+    if (!current || !current.geo) return;
+    const r = ch.getBoundingClientRect(), g = current.geo;
+    const i = Math.max(0, Math.min(g.n - 1, Math.floor((x - r.left - g.L) / g.slot)));
+    if (i !== st.sel) { st.sel = i; drawGraphOnly(); }
+  };
+  const begin = (x, y) => {
+    press = { x, y, lx: x, t: Date.now(), scrub: false, moved: false };
+    press.timer = setTimeout(() => { if (!press || press.moved) return; press.scrub = true; ch.classList.add('scrub'); try { navigator.vibrate && navigator.vibrate(8); } catch { } selectAt(press.lx); }, 280);
+  };
+  const move = (x, y, ev) => {
+    if (!press) return; press.lx = x;
+    if (press.scrub) { if (ev && ev.cancelable) ev.preventDefault(); selectAt(x); return; }
+    if (Math.abs(x - press.x) > 10 || Math.abs(y - press.y) > 10) { press.moved = true; clearTimeout(press.timer); }
+  };
+  const end = (x, y) => {
+    if (!press) return; clearTimeout(press.timer); ch.classList.remove('scrub');
+    const p = press; press = null;
+    if (p.scrub) return; // čára zůstane na posledním místě
+    const dx = x - p.x, dy = y - p.y, dt = Date.now() - p.t;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy) && dt < 800) { navigate('both', dx > 0 ? -1 : 1); return; }
+    if (!p.moved && st.sel != null) { st.sel = null; drawGraphOnly(); }
+  };
+  ch.addEventListener('touchstart', e => { lastTouch = Date.now(); const t = e.touches[0]; if (e.touches.length === 1) begin(t.clientX, t.clientY); else { clearTimeout(press && press.timer); press = null; } }, { passive: true });
+  ch.addEventListener('touchmove', e => { const t = e.touches[0]; move(t.clientX, t.clientY, e); }, { passive: false });
+  ch.addEventListener('touchend', e => { lastTouch = Date.now(); const t = e.changedTouches[0]; end(t.clientX, t.clientY); });
+  ch.addEventListener('touchcancel', () => { if (press) clearTimeout(press.timer); press = null; ch.classList.remove('scrub'); });
+  ch.addEventListener('contextmenu', e => e.preventDefault());
+  // myš (počítač)
+  ch.addEventListener('mousedown', e => { if (e.button === 0 && Date.now() - lastTouch > 1000) begin(e.clientX, e.clientY); });
+  window.addEventListener('mousemove', e => { if (press) move(e.clientX, e.clientY, null); });
+  window.addEventListener('mouseup', e => { if (press) end(e.clientX, e.clientY); });
   let rt = null; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(draw, 150); });
 
   // nastavení
