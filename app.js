@@ -126,7 +126,13 @@ async function wuGet(path, params = {}) {
   if (r.status === 204) return [];
   if (r.status === 401) throw new Error('Weather Underground odmítl přístupový klíč. Zkontrolujte ho v nastavení.');
   if (r.status === 429) throw new Error('Weather Underground hlásí příliš mnoho dotazů. Zkuste to za chvíli.');
-  if (!r.ok) throw new Error('Weather Underground vrátil chybu ' + r.status + '.');
+  if (!r.ok) {
+    let detail = '';
+    try { const b = await r.text(); try { const j = JSON.parse(b); detail = (j.errors || []).map(e => (e.error && (e.error.code + ' ' + e.error.message)) || '').filter(Boolean).join('; '); } catch { detail = b.slice(0, 160); } } catch { }
+    const shown = Object.entries(params).map(([k, v]) => k + '=' + v).join(' ');
+    const e = new Error(`Weather Underground vrátil chybu ${r.status} (${path}${shown ? ' ' + shown : ''})${detail ? ': ' + detail : ''}`);
+    e.status = r.status; throw e;
+  }
   const t = await r.text(); if (!t.trim()) return [];
   const j = JSON.parse(t);
   return j.observations || j.summaries || [];
