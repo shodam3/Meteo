@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 8;
+const APP_VERSION = 9;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -790,12 +790,25 @@ function renderStatus() {
     else txt = `Poslední měření ${hm}`;
   }
   if (!warn && s.dataset.note) txt = s.dataset.note;
-  s.textContent = txt; s.classList.toggle('warn', warn);
+  const t = today(), dt = `Dnes ${DOWL[t.getDay()]} ${t.getDate()}. ${t.getMonth() + 1}. ${t.getFullYear()}`;
+  s.textContent = txt ? dt + ' · ' + txt : dt; s.classList.toggle('warn', warn);
 }
 async function loadCurrent() {
   try { const o = (await wuGet('observations/current'))[0]; if (o) { cur = o; renderCurrent(); } }
   catch (err) { note(err.message); }
 }
+
+// ---------- panely (nastavení, výběr období); systémové tlačítko Zpět je zavře ----------
+function openSheet(id) {
+  $(id).hidden = false;
+  try { history.pushState({ sheet: id }, ''); } catch { }
+}
+function closeSheet(id) {
+  if ($(id).hidden) return;
+  $(id).hidden = true;
+  try { if (history.state && history.state.sheet === id) history.back(); } catch { }
+}
+window.addEventListener('popstate', () => { for (const id of ['settings', 'picker']) $(id).hidden = true; });
 
 // ---------- výběr období rolovacími kolečky ----------
 const ROW = 40;
@@ -855,9 +868,9 @@ function openPicker(which) {
   $('pkOk').onclick = () => {
     let d = get(); if (d > t) d = t;
     if (which === 'b') st.cmp = d; else st.anchor = d;
-    $('picker').hidden = true; st.sel = null; refresh();
+    closeSheet('picker'); st.sel = null; refresh();
   };
-  $('picker').hidden = false;
+  openSheet('picker');
   // po zobrazení znovu nastavit polohy koleček (skryté prvky nemají rozměry)
   for (const w of box.querySelectorAll('.wheel')) { const on = w.querySelector('.witem.on'); if (on) w.scrollTop = Number(on.dataset.i) * ROW; }
 }
@@ -884,8 +897,8 @@ function bindUI() {
     const pk = e.target.closest('[data-pick]'); if (pk) { openPicker(pk.dataset.pick); return; }
     const b = e.target.closest('[data-nav]'); if (!b || b.disabled) return; navigate(b.dataset.nav, Number(b.dataset.d));
   });
-  $('pkCancel').onclick = () => { $('picker').hidden = true; };
-  $('picker').addEventListener('click', e => { if (e.target === $('picker')) $('picker').hidden = true; });
+  $('pkCancel').onclick = () => { closeSheet('picker'); };
+  $('picker').addEventListener('click', e => { if (e.target === $('picker')) closeSheet('picker'); });
   $('btnCmp').onclick = () => { st.cmp = st.cmp ? null : yearAgo(st.anchor); st.sel = null; refresh(); };
   // graf: podržení prstu = svislá čára s hodnotami, kterou lze posouvat; rychlé přejetí do strany = jiné období; klepnutí = skrýt čáru
   const ch = $('chart'); let press = null, lastTouch = 0;
@@ -929,11 +942,12 @@ function bindUI() {
     const q = LS.get('meteo.quota', { d: '', n: 0 });
     const hm = k => HMODE_NAMES[LS.get('meteo.hmode.' + k, '')] || 'zatím nezjištěno';
     $('quota').textContent = `Dotazů na Weather Underground dnes: ${q.d === ymd(today()) ? q.n : 0} (bezpečný limit 1400).\nStahování historie – hodinová data: ${hm('hourly')}, denní souhrny: ${hm('daily')}.\nVerze aplikace: ${APP_VERSION}`;
-    $('setMsg').textContent = ''; $('setMsg').className = 'msg'; $('settings').hidden = false;
+    $('setMsg').textContent = ''; $('setMsg').className = 'msg'; openSheet('settings');
   };
   $('btnSettings').onclick = open;
-  $('btnClose').onclick = () => { $('settings').hidden = true; };
-  $('settings').addEventListener('click', e => { if (e.target === $('settings')) $('settings').hidden = true; });
+  $('btnClose').onclick = () => { closeSheet('settings'); };
+  $('btnBack').onclick = () => { closeSheet('settings'); };
+  $('settings').addEventListener('click', e => { if (e.target === $('settings')) closeSheet('settings'); });
   $('btnShow').onclick = () => { for (const id of ['fWuKey', 'fGhToken']) $(id).type = $(id).type === 'password' ? 'text' : 'password'; };
   $('btnSave').onclick = async () => {
     const msg = $('setMsg'); msg.className = 'msg'; msg.textContent = 'Ověřuji…';
@@ -955,7 +969,7 @@ function bindUI() {
     if (stationChanged) { await idb.clear(); LS.del('meteo.hmode.hourly'); LS.del('meteo.hmode.daily'); }
     msg.textContent = lines.join('\n'); msg.className = 'msg ' + (ok ? 'ok' : 'bad');
     renderCurrent();
-    if (ok) setTimeout(() => { $('settings').hidden = true; }, 1200);
+    if (ok) setTimeout(() => { closeSheet('settings'); }, 1200);
     refresh();
   };
   $('btnClear').onclick = async () => {
@@ -973,7 +987,7 @@ function tick() {
   if (inP(st.anchor) || inP(st.cmp)) refresh();
 }
 function start() {
-  bindUI(); renderControls();
+  bindUI(); renderControls(); renderStatus();
   setInterval(() => { if (document.visibilityState === 'visible') tick(); }, 5 * 60e3);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Date.now() - lastTick > 4 * 60e3) tick(); });
   if (!cfg.station || !cfg.wuKey) {
