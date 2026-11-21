@@ -1,5 +1,6 @@
 'use strict';
-const APP_VERSION = 5;
+const APP_VERSION = 6;
+const rawPts = new Map();
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -340,8 +341,8 @@ function rain5(d) {
   const p = rain5load(d).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
 }
 async function rain5load(d) {
-  const key = 'rain5/' + d, e = await idb.get(key);
-  if (e && (e.final || Date.now() - e.fetchedAt < STALE)) return e.hours;
+  const key = 'rain5b/' + d, e = await idb.get(key);
+  if (e && (e.final || Date.now() - e.fetchedAt < STALE)) { rawPts.set(d, e.pts || []); return e.hours; }
   setBusy(1);
   try {
     const obs = await wuGet('history/all', { date: d.replace(/-/g, '') });
@@ -358,7 +359,9 @@ async function rain5load(d) {
       }
     }
     const final = Date.now() > addDays(parseYmd(d), 1).getTime() + 3600e3;
-    await idb.set(key, { final, fetchedAt: Date.now(), hours });
+    const raw = obs.map(o => [String(o.obsTimeLocal || '').slice(0, 19), num((o.metric || {}).precipTotal), o.epoch || null]);
+    rawPts.set(d, raw);
+    await idb.set(key, { final, fetchedAt: Date.now(), hours, pts: raw });
     return hours;
   } catch (err) { note('Srážky po hodinách: ' + err.message); return e ? e.hours : null; }
   finally { setBusy(-1); }
@@ -705,8 +708,14 @@ function renderInfo() {
     return `<div class="il ${cls}">${t}</div>`;
   };
   const bk = c.a.Bk[i];
+  let raw = '';
+  if (st.v === 'rain' && bk && bk.k === 'h' && rawPts.has(bk.d)) {
+    const hh = pad(bk.h), prevH = pad(bk.h - 1 < 0 ? 0 : bk.h - 1);
+    const pts = rawPts.get(bk.d).filter(x => { const h = String(x[0]).slice(11, 13); return h === hh || h === prevH; });
+    raw = `<div class="muted" style="font-size:11px;margin-top:4px">Měření WU: ${pts.map(x => esc(String(x[0]).slice(11, 16)) + ' ' + fmt(x[1], 2)).join(' · ') || 'žádná'}</div>`;
+  }
   const drill = bk && (bk.k === 'd' || bk.k === 'm') ? `<button class="drill" id="btnDrill">${bk.k === 'd' ? 'Den' : 'Měsíc'} ›</button>` : '';
-  el.innerHTML = `<div>${line(c.a, 'a')}${c.b ? line(c.b, 'b') : ''}</div>${drill}`;
+  el.innerHTML = `<div>${line(c.a, 'a')}${c.b ? line(c.b, 'b') : ''}${raw}</div>${drill}`;
   if (drill) $('btnDrill').onclick = () => {
     const toDate = x => x.k === 'd' ? parseYmd(x.d) : parseYmd(x.m + '-01');
     const bb = c.b && c.b.Bk[i];
