@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 31;
+const APP_VERSION = 32;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -980,6 +980,18 @@ function extraVals(a, b) {
   for (const X of [a, b]) if (X) for (const x of X.vals) out.push(x.hi, noMin ? x.avg : x.lo);
   return out;
 }
+// záření a UV: WU posílá za hodinu jen maximum, proto se max / min / průměr hodiny počítají z měření po 5 minutách
+function fineHours(X, src) {
+  if (!src || !src.fine) return;
+  const vv = src.fine.v[st.v] || [], by = Array.from({ length: 24 }, () => []);
+  src.fine.t.forEach((t, i) => { if (vv[i] != null) by[Math.floor(t / 60)].push(vv[i]); });
+  const mode = curMode();
+  by.forEach((xs, h) => {
+    if (!xs.length || !X.vals[h]) return;
+    const hi = Math.max(...xs), lo = Math.min(...xs), avg = xs.reduce((p, q) => p + q, 0) / xs.length;
+    X.vals[h] = { val: mode === 'max' ? hi : mode === 'min' ? lo : avg, hi, lo, avg };
+  });
+}
 // sloupec probíhající hodiny z podrobných měření a aktuálního měření (hodinový záznam WU se objevuje se zpožděním)
 function liveHour(a) {
   if (dayDiff(today(), st.anchor) !== 0 || !model.A.fine) return;
@@ -1063,6 +1075,7 @@ function draw() {
   const { A, B } = model;
   const mk = X => { const Bk = buildBuckets(st.scale, chartType(), X.p); fillBuckets(Bk, X.h, X.d); return { Bk, vals: bucketVals(Bk, st.v, curMode()) }; };
   const a = mk(A), b = B ? mk(B) : null;
+  if (st.scale === 'day' && chartType() === 'bar' && VARS[st.v].kind === 'max') { fineHours(a, A); if (b) fineHours(b, B); }
   if (!B && st.scale === 'day' && chartType() === 'bar') liveHour(a);
   if (st.sel != null && !(st.scale === 'day' && chartType() === 'line') && st.sel >= Math.max(a.Bk.length, b ? b.Bk.length : 0)) st.sel = null;
   const o = chartOpts(a, b);
