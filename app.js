@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 29;
+const APP_VERSION = 30;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -41,13 +41,13 @@ const LS = {
 const VARS = {
   temp: { n: 'Teplota', u: '°C', dec: 1, kind: 'hla', chart: 'line' },
   dew: { n: 'Rosný bod', u: '°C', dec: 1, kind: 'hla', chart: 'line' },
-  hum: { n: 'Vlhkost', u: '%', dec: 0, kind: 'hla', chart: 'line' },
+  hum: { n: 'Vlhkost', u: '%', dec: 0, kind: 'hla', chart: 'line', cap: 100 },
   press: { n: 'Tlak', u: 'hPa', dec: 1, kind: 'hla', chart: 'line' },
   wind: { n: 'Vítr', u: 'km/h', dec: 1, kind: 'hla', chart: 'bar', zero: true, noMin: true },
   gust: { n: 'Nárazy', u: 'km/h', dec: 1, kind: 'hla', chart: 'bar', zero: true, noMin: true },
   rain: { n: 'Srážky', u: 'mm', dec: 1, kind: 'sum', chart: 'bar', zero: true },
-  solar: { n: 'Záření', u: 'W/m²', dec: 0, kind: 'max', chart: 'line', zero: true },
-  uv: { n: 'UV', u: '', dec: 1, kind: 'max', chart: 'bar', zero: true }
+  solar: { n: 'Záření', u: 'W/m²', dec: 0, kind: 'max', chart: 'bar', zero: true, barOnly: true },
+  uv: { n: 'UV', u: '', dec: 1, kind: 'max', chart: 'bar', zero: true, barOnly: true }
 };
 
 // ---------- nastavení a stav ----------
@@ -63,9 +63,9 @@ const st = {
   sel: null
 };
 const saveView = () => LS.set('meteo.view', { scale: st.scale, v: st.v, mode: st.mode, charts: st.charts });
-const chartType = () => st.charts[st.v] || VARS[st.v].chart;
+const chartType = () => VARS[st.v].barOnly ? 'bar' : (st.charts[st.v] || VARS[st.v].chart);
 // u větru a nárazů WU jako minimum posílá okamžité hodnoty (téměř vždy 0), volba Min se proto nenabízí
-const curMode = () => VARS[st.v].noMin && st.mode === 'min' ? 'avg' : st.mode;
+const curMode = () => VARS[st.v].barOnly ? 'max' : VARS[st.v].noMin && st.mode === 'min' ? 'avg' : st.mode;
 
 // ---------- úložiště v telefonu (IndexedDB) ----------
 const idb = {
@@ -680,13 +680,15 @@ function cutRecs(X, cut) {
 
 // ---------- graf ----------
 // rozsah osy: zaokrouhlení na celé dílky; když je krajní hodnota blíž k okraji než 8 % rozsahu, přidá se další celý dílek
-function nice(mn, mx, zero) {
+function nice(mn, mx, zero, cap) {
+  if (cap != null) { mx = cap; mn = Math.min(mn, cap - 10); } // pevná horní mez (vlhkost 100 %)
   if (zero) mn = Math.min(0, mn);
   if (mx - mn < 1e-9) { mn -= 1; mx += 1; if (zero && mn < 0) { mx -= mn; mn = 0; } }
   const span = mx - mn, raw = span / 4, mag = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 2.5, 5, 10].map(q => q * mag).find(q => q >= raw - 1e-12);
   let lo = Math.floor(mn / step + 1e-9) * step, hi = Math.ceil(mx / step - 1e-9) * step;
   if (hi - mx < span * 0.08) hi += step;
+  if (cap != null) hi = Math.min(hi, cap);
   if (!(zero && lo >= 0) && mn - lo < span * 0.08) lo -= step;
   const ticks = []; for (let t = lo; t <= hi + step / 1000; t += step) ticks.push(Math.round(t / step) * step);
   return { lo, hi, step, ticks };
@@ -705,7 +707,7 @@ function drawChart(el, o) {
   if (o.extra) for (const v of o.extra) if (v != null) all.push(v);
   if (!hasData) { el.innerHTML = `<div class="empty">${o.emptyMsg || 'Pro toto období nejsou žádná data.'}</div>`; return null; }
   let mn = all[0], mx = all[0]; for (const v of all) { if (v < mn) mn = v; if (v > mx) mx = v; }
-  const sc = nice(mn, mx, o.zero);
+  const sc = nice(mn, mx, o.zero, o.cap);
   const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
   // levý okraj jen tak široký, aby se vešly popisky osy
   const L = Math.max(20, Math.max(...sc.ticks.map(t => fmt(t, tdec).length)) * 5.6 + 6), R = 4, Bm = 22, n = o.n, slot = (W - L - R) / n;
@@ -846,7 +848,7 @@ function drawFine(el, o) {
   for (const f of o.fc || []) for (const p of f.pts) all.push(p[1]);
   if (!all.length) { el.innerHTML = `<div class="empty">${o.emptyMsg || 'Pro tento den nejsou žádná data.'}</div>`; return null; }
   let mn = all[0], mx = all[0]; for (const v of all) { if (v < mn) mn = v; if (v > mx) mx = v; }
-  const sc = nice(mn, mx, o.zero), plotH = H - T - Bm;
+  const sc = nice(mn, mx, o.zero, o.cap), plotH = H - T - Bm;
   const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
   const L = Math.max(20, Math.max(...sc.ticks.map(t => fmt(t, tdec).length)) * 5.6 + 6), slot = (W - L - R) / 24;
   const x = mi => L + slot * mi / 60, y = v => T + (sc.hi - v) / (sc.hi - sc.lo) * plotH, f1 = v => Math.round(v * 10) / 10;
@@ -913,7 +915,8 @@ function renderControls() {
   for (const b of $('scales').children) { const on = b.dataset.s === st.scale; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
   for (const b of $('types').children) { const on = b.dataset.t === chartType(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
   const V = VARS[st.v];
-  $('modes').style.visibility = V.kind === 'sum' || (st.scale === 'day' && chartType() === 'line') ? 'hidden' : '';
+  $('modes').style.visibility = V.kind === 'sum' || V.barOnly || (st.scale === 'day' && chartType() === 'line') ? 'hidden' : '';
+  $('types').style.visibility = V.barOnly ? 'hidden' : '';
   for (const b of $('modes').children) { const on = b.dataset.m === curMode(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); b.hidden = b.dataset.m === 'min' && !!V.noMin; }
   $('modes').className = 'seg small ' + (V.noMin ? 's2m' : 's3');
   const t = today();
@@ -1005,7 +1008,7 @@ function chartOpts(a, b) {
   const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
   const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
-  const o = { type, n, series, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+  const o = { type, n, series, cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
   const future = st.scale === 'day' && !b && st.anchor > today();
   // čárový graf dne z podrobných měření
   if (st.scale === 'day' && type === 'line' && (model.A.fine || future || (b && model.B && model.B.fine))) {
@@ -1021,7 +1024,7 @@ function chartOpts(a, b) {
       return pts.length ? pts : null;
     };
     const isT = dayDiff(today(), st.anchor) === 0;
-    const fo = { fine: true, a: toPts(model.A, isT), b: b ? toPts(model.B, false) : null, zero: !!V.zero, dec: V.dec, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+    const fo = { fine: true, cap: V.cap, a: toPts(model.A, isT), b: b ? toPts(model.B, false) : null, zero: !!V.zero, dec: V.dec, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
     if (fcApplicable()) fo.fc = fcFine(model.fc || {}, ymd(st.anchor), st.v);
     if (isT && !b) { const nw = new Date(); fo.now = nw.getHours() * 60 + nw.getMinutes(); }
     if (future) fo.emptyMsg = !FC_VARS.includes(st.v) ? 'Předpověď pro tuto veličinu není k dispozici.'
