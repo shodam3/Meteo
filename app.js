@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 20;
+const APP_VERSION = 21;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -734,10 +734,17 @@ function drawChart(el, o) {
       if (se.band) {
         let seg = [];
         const flush = () => {
-          if (seg.length > 1) s += `<polygon fill="url(#gA)" fill-opacity="0.22" points="${seg.map(([i, h]) => f1(xc(i)) + ',' + f1(y(h))).join(' ')} ${seg.slice().reverse().map(([i, , l]) => f1(xc(i)) + ',' + f1(y(l))).join(' ')}"/>`;
+          if (seg.length > 1) s += `<polygon fill="url(#gA)" fill-opacity="0.22" points="${seg.map(([x, h]) => f1(x) + ',' + f1(y(h))).join(' ')} ${seg.slice().reverse().map(([x, , l]) => f1(x) + ',' + f1(y(l))).join(' ')}"/>`;
           seg = [];
         };
-        se.band.forEach((b, i) => { if (b && b[0] != null && b[1] != null) seg.push([i, b[0], b[1]]); else flush(); }); flush();
+        let lastB = -1; se.band.forEach((b, i) => { if (b && b[0] != null && b[1] != null) lastB = i; });
+        se.band.forEach((b, i) => {
+          if (b && b[0] != null && b[1] != null) {
+            seg.push([xc(i), b[0], b[1]]);
+            // podkres se zúží k aktuálnímu měření
+            if (k === 0 && i === lastB && o.tail && o.tail.x > i + 0.5) seg.push([L + slot * o.tail.x, o.tail.v, o.tail.v]);
+          } else flush();
+        }); flush();
       }
       let d = '', run = 0, lastI = -1;
       se.vals.forEach((v, i) => {
