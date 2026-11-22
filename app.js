@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 17;
+const APP_VERSION = 18;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -337,13 +337,16 @@ async function loadMonth(kind, ymStr) {
 // Přesné hodinové srážky z podrobných měření (history/all, jen po dnech). Hodinová data WU totiž udávají
 // úhrn od půlnoci k okamžiku, který neleží přesně na konci hodiny, takže se déšť posouvá mezi hodinami.
 const r5inflight = new Map();
-function rain5(d) {
+const rain5 = async d => { const x = await dayDetail(d); return x ? x.hours : null; };
+// podrobná měření dne: hodinové srážky a přesné časy maxim a minim
+function dayDetail(d) {
   if (r5inflight.has(d)) return r5inflight.get(d);
   const p = rain5load(d).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
 }
+const EXT = { temp: ['tempHigh', 'tempLow'], dew: ['dewptHigh', 'dewptLow'], hum: ['humidityHigh', 'humidityLow'], press: ['pressureMax', 'pressureMin'], wind: ['windspeedHigh', null], gust: ['windgustHigh', null], solar: ['solarRadiationHigh', null], uv: ['uvHigh', null] };
 async function rain5load(d) {
-  const key = 'rain5b/' + d, e = await idb.get(key);
-  if (e && (e.final || Date.now() - e.fetchedAt < STALE)) return e.hours;
+  const key = 'day5/' + d, e = await idb.get(key);
+  if (e && (e.final || Date.now() - e.fetchedAt < STALE)) return e;
   setBusy(1);
   try {
     const obs = await wuGet('history/all', { date: d.replace(/-/g, '') });
@@ -359,10 +362,22 @@ async function rain5load(d) {
         hours[h] = r2(Math.max(0, end[h] - prev)); prev = Math.max(prev, end[h]);
       }
     }
+    const ext = {};
+    for (const [v, [fh, fl]] of Object.entries(EXT)) {
+      const x = {};
+      for (const o of obs) {
+        const t = String(o.obsTimeLocal || ''); if (!t.startsWith(d)) continue;
+        const m = o.metric || {}, g = f => num(m[f] ?? o[f]), hm = t.slice(11, 16).replace(/^0(\d)/, '$1');
+        const h = g(fh); if (h != null && (x.hi == null || h > x.hi)) { x.hi = h; x.hiT = hm; }
+        if (fl) { const l = g(fl); if (l != null && (x.lo == null || l < x.lo)) { x.lo = l; x.loT = hm; } }
+      }
+      if (x.hi != null) ext[v] = x;
+    }
     const final = Date.now() > addDays(parseYmd(d), 1).getTime() + 3600e3;
-    await idb.set(key, { final, fetchedAt: Date.now(), hours });
-    return hours;
-  } catch (err) { note('Srážky po hodinách: ' + err.message); return e ? e.hours : null; }
+    const res = { final, fetchedAt: Date.now(), hours, ext };
+    await idb.set(key, res);
+    return res;
+  } catch (err) { note('Podrobná měření: ' + err.message); return e || null; }
   finally { setBusy(-1); }
 }
 async function applyRain5(hourly) {
@@ -785,8 +800,10 @@ async function refresh() {
   const pA = periodOf(st.scale, st.anchor), pB = st.cmp ? periodOf(st.scale, st.cmp) : null;
   const needH = st.scale === 'day' || st.scale === 'week';
   const load = async p => {
-    const [h, d] = await Promise.all([needH ? getRange('hourly', p.s, p.e).then(x => st.v === 'rain' ? applyRain5(x) : x) : [], getRange('daily', p.s, p.e)]);
-    return { p, h, d };
+    const wantDet = st.scale === 'day' && p.s <= today();
+    const [h, d, det] = await Promise.all([needH ? getRange('hourly', p.s, p.e).then(x => st.v === 'rain' ? applyRain5(x) : x) : [], getRange('daily', p.s, p.e),
+      wantDet ? dayDetail(ymd(p.s)).catch(() => null) : null]);
+    return { p, h, d, ext: det && det.ext ? det.ext : null };
   };
   setBusy(1);
   // když načítání trvá, nenechávat v grafu data předchozího období
@@ -915,9 +932,14 @@ function renderSummary() {
   fcCard.hidden = !fcHtml || !!B; fcCard.innerHTML = fcHtml;
   if (!B) {
     const items = summary(st.v, st.scale, A.h, A.d);
+    const ex = A.ext && A.ext[st.v];
+    if (ex && st.scale === 'day') for (const it of items) {
+      if (it.id === 'max' && ex.hi != null) { it.val = ex.hi; it.atText = 'v ' + ex.hiT; }
+      if (it.id === 'min' && ex.lo != null) { it.val = ex.lo; it.atText = 'v ' + ex.loT; }
+    }
     if (!A.d.length && !A.h.length) { el.innerHTML = '<p class="note">Pro toto období nejsou žádná data.</p>'; return; }
     const src = st.v === 'rain' && (st.scale === 'day' || st.scale === 'week') && rainSrc ? `<p class="note" style="margin:10px 0 0">${esc(rainSrc)}</p>` : '';
-    el.innerHTML = '<div class="tiles">' + items.map(it => `<div class="st"><span class="l">${esc(it.l)}</span><span class="v ${it.cls || ''}">${fmt(it.val, it.dec)}${it.val != null && it.u ? ' ' + esc(it.u) : ''}</span><span class="n">${esc(it.at ? fmtAt(it.at, st.scale) : (it.n || ''))}</span></div>`).join('') + '</div>' + src;
+    el.innerHTML = '<div class="tiles">' + items.map(it => `<div class="st"><span class="l">${esc(it.l)}</span><span class="v ${it.cls || ''}">${fmt(it.val, it.dec)}${it.val != null && it.u ? ' ' + esc(it.u) : ''}</span><span class="n">${esc(it.atText || (it.at ? fmtAt(it.at, st.scale) : (it.n || '')))}</span></div>`).join('') + '</div>' + src;
     return;
   }
   const cut = Math.min(elapsedCut(A.p), elapsedCut(B.p));
