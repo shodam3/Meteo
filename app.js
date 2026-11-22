@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 25;
+const APP_VERSION = 26;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -689,7 +689,7 @@ function nice(mn, mx, zero) {
   return { lo, hi: hi > lo ? hi : lo + step, step, ticks };
 }
 function drawChart(el, o) {
-  const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 230;
+  const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 185;
   const all = [];
   for (const s of o.series) {
     for (const v of s.vals) if (v != null) all.push(v);
@@ -703,8 +703,9 @@ function drawChart(el, o) {
   if (!hasData) { el.innerHTML = `<div class="empty">${o.emptyMsg || 'Pro toto období nejsou žádná data.'}</div>`; return null; }
   let mn = all[0], mx = all[0]; for (const v of all) { if (v < mn) mn = v; if (v > mx) mx = v; }
   const sc = nice(mn, mx, o.zero);
-  const L = 36, R = 6, Bm = 22, n = o.n, slot = (W - L - R) / n;
   const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
+  // levý okraj jen tak široký, aby se vešly popisky osy
+  const L = Math.max(20, Math.max(...sc.ticks.map(t => fmt(t, tdec).length)) * 5.6 + 6), R = 4, Bm = 22, n = o.n, slot = (W - L - R) / n;
   let lab = null, T = 12, txt = null;
   if (o.type === 'bar' && o.series.length === 1) {
     txt = o.series[0].vals.map(v => v == null ? '' : fmt(v, o.dec));
@@ -724,7 +725,7 @@ function drawChart(el, o) {
   for (const t of sc.ticks) {
     const yy = f1(y(t));
     s += `<line x1="${L}" y1="${yy}" x2="${W - R}" y2="${yy}" stroke="${t === 0 && sc.lo < 0 ? '#9CA3AF' : '#E5E7EB'}" stroke-width="1"/>`;
-    s += `<text x="${L - 4}" y="${yy + 3.5}" text-anchor="end">${fmt(t, tdec)}</text>`;
+    s += `<text x="${L - 3}" y="${yy + 3.5}" text-anchor="end">${fmt(t, tdec)}</text>`;
   }
   for (let i = 0; i < n; i++) {
     if (o.xGrid && o.xGrid(i)) s += `<line x1="${f1(L + slot * i)}" y1="${T}" x2="${f1(L + slot * i)}" y2="${T + plotH}" stroke="#E5E7EB" stroke-dasharray="2 3"/>`;
@@ -836,14 +837,15 @@ function nearestPt(pts, min, maxDist = 15) {
 }
 const hhmm = mi => `${Math.floor(mi / 60)}:${pad(Math.round(mi % 60))}`;
 function drawFine(el, o) {
-  const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 230, L = 36, R = 6, T = 12, Bm = 22;
+  const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 185, R = 4, T = 10, Bm = 22;
   const all = [];
   for (const s2 of [o.a, o.b]) if (s2) for (const p of s2) all.push(p[1]);
   for (const f of o.fc || []) for (const p of f.pts) all.push(p[1]);
   if (!all.length) { el.innerHTML = `<div class="empty">${o.emptyMsg || 'Pro tento den nejsou žádná data.'}</div>`; return null; }
   let mn = all[0], mx = all[0]; for (const v of all) { if (v < mn) mn = v; if (v > mx) mx = v; }
-  const sc = nice(mn, mx, o.zero), plotH = H - T - Bm, slot = (W - L - R) / 24;
+  const sc = nice(mn, mx, o.zero), plotH = H - T - Bm;
   const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
+  const L = Math.max(20, Math.max(...sc.ticks.map(t => fmt(t, tdec).length)) * 5.6 + 6), slot = (W - L - R) / 24;
   const x = mi => L + slot * mi / 60, y = v => T + (sc.hi - v) / (sc.hi - sc.lo) * plotH, f1 = v => Math.round(v * 10) / 10;
   const px = pts => pts.map(p => [x(p[0]), y(p[1])]);
   let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.aria || 'Graf')}">`;
@@ -853,7 +855,7 @@ function drawFine(el, o) {
   s += '<g font-size="10" fill="#4B5563" font-family="inherit">';
   for (const t of sc.ticks) {
     const yy = f1(y(t));
-    s += `<line x1="${L}" y1="${yy}" x2="${W - R}" y2="${yy}" stroke="${t === 0 && sc.lo < 0 ? '#9CA3AF' : '#E5E7EB'}" stroke-width="1"/><text x="${L - 4}" y="${yy + 3.5}" text-anchor="end">${fmt(t, tdec)}</text>`;
+    s += `<line x1="${L}" y1="${yy}" x2="${W - R}" y2="${yy}" stroke="${t === 0 && sc.lo < 0 ? '#9CA3AF' : '#E5E7EB'}" stroke-width="1"/><text x="${L - 3}" y="${yy + 3.5}" text-anchor="end">${fmt(t, tdec)}</text>`;
   }
   for (let h = 0; h < 24; h++) {
     if (h % 6 === 0 && h > 0) s += `<line x1="${f1(x(h * 60))}" y1="${T}" x2="${f1(x(h * 60))}" y2="${T + plotH}" stroke="#E5E7EB" stroke-dasharray="2 3"/>`;

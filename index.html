@@ -70,11 +70,13 @@ label.chk small{display:block}
 .leg{display:inline-block;width:20px;height:0;border-top:3px solid #10BCD3;vertical-align:middle;margin-right:6px}
 .leg.b{border-top:3px dashed var(--b)}
 .card{background:var(--card);border-radius:16px;padding:12px}
+.chartcard{padding:10px 4px 8px}
+.chartcard .charthead,.chartcard .fcbar,.chartcard .info{padding:0 6px}
 .charthead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
 #chart{width:100%;touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 #chart.scrub{touch-action:none}
 #chart svg{display:block;pointer-events:none}
-.empty{height:220px;display:flex;align-items:center;justify-content:center;color:var(--mu);font-size:14px;text-align:center;padding:0 20px}
+.empty{height:180px;display:flex;align-items:center;justify-content:center;color:var(--mu);font-size:14px;text-align:center;padding:0 20px}
 .info{font-size:13px;margin-top:6px;min-height:38px;display:flex;align-items:center;justify-content:space-between;gap:8px}
 .info .hint{color:var(--mu);font-size:12px;text-align:center;width:100%}
 .info .il{line-height:1.35}
@@ -149,7 +151,7 @@ legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bot
 
 <div id="navs"></div>
 
-<section class="card">
+<section class="card chartcard">
 <div class="charthead">
 <div class="seg s2 small" id="types" role="group" aria-label="Typ grafu">
 <button data-t="line" aria-label="Čárový graf"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"></path></svg></button>
@@ -217,6 +219,6 @@ legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bot
 </div>
 </div>
 
-<script src="app.js?v=25"></script>
+<script src="app.js?v=26"></script>
 </body>
 </html>
