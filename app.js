@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 32;
+const APP_VERSION = 33;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
