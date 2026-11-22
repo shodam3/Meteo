@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 33;
+const APP_VERSION = 34;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1322,6 +1322,7 @@ function navigate(which, d) {
   if (st.cmp && periodOf(st.scale, st.cmp).s > t) st.cmp = t;
   st.sel = null; refresh();
 }
+const zoomed = () => !!(window.visualViewport && window.visualViewport.scale > 1.02);
 function bindUI() {
   $('vars').addEventListener('click', e => {
     const b = e.target.closest('[data-v]'); if (!b) return;
@@ -1384,7 +1385,7 @@ function bindUI() {
     const p = press; press = null;
     if (p.scrub) return; // čára zůstane na posledním místě
     const dx = x - p.x, dy = y - p.y, dt = Date.now() - p.t;
-    if (Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy) && dt < 800) { navigate('both', dx > 0 ? -1 : 1); return; }
+    if (!zoomed() && Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy) && dt < 800) { navigate('both', dx > 0 ? -1 : 1); return; }
     if (!p.moved && st.sel != null) { st.sel = null; drawGraphOnly(); }
   };
   ch.addEventListener('touchstart', e => { lastTouch = Date.now(); const t = e.touches[0]; if (e.touches.length === 1) begin(t.clientX, t.clientY); else { clearTimeout(press && press.timer); press = null; } }, { passive: true });
@@ -1392,6 +1393,10 @@ function bindUI() {
   ch.addEventListener('touchend', e => { lastTouch = Date.now(); const t = e.changedTouches[0]; end(t.clientX, t.clientY); });
   ch.addEventListener('touchcancel', () => { if (press) clearTimeout(press.timer); press = null; ch.classList.remove('scrub'); });
   ch.addEventListener('contextmenu', e => e.preventDefault());
+  // přiblížená stránka: graf se dá posouvat všemi směry a přejetí do strany nemění období
+  const updZoom = () => { ch.style.touchAction = zoomed() ? 'pan-x pan-y pinch-zoom' : ''; };
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', updZoom);
+  ch.addEventListener('touchend', updZoom);
   // myš (počítač)
   ch.addEventListener('mousedown', e => { if (e.button === 0 && Date.now() - lastTouch > 1000) begin(e.clientX, e.clientY); });
   window.addEventListener('mousemove', e => { if (press) move(e.clientX, e.clientY, null); });
