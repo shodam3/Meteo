@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 21;
+const APP_VERSION = 22;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -696,7 +696,7 @@ function drawChart(el, o) {
   }
   for (let i = 0; i < n; i++) {
     if (o.xGrid && o.xGrid(i)) s += `<line x1="${f1(L + slot * i)}" y1="${T}" x2="${f1(L + slot * i)}" y2="${T + plotH}" stroke="#E5E7EB" stroke-dasharray="2 3"/>`;
-    const lb = o.xLabel ? o.xLabel(i) : ''; if (lb) s += `<text x="${f1(xc(i))}" y="${H - 6}" text-anchor="middle" font-size="11">${esc(lb)}</text>`;
+    const lb = o.xLabel ? o.xLabel(i) : ''; if (lb) s += `<text x="${f1(o.xEdge ? L + slot * i : xc(i))}" y="${H - 6}" text-anchor="middle" font-size="11">${esc(lb)}</text>`;
   }
   s += '</g>';
   const base = y(sc.lo);
@@ -768,7 +768,8 @@ function drawChart(el, o) {
 }
 function xAxis(scale, type, B) {
   const D = i => B[i] && B[i].d ? parseYmd(B[i].d) : null;
-  if (scale === 'day') return { lab: i => i % 3 === 0 ? i + 'h' : '', grid: i => i % 6 === 0 && i > 0 };
+  // u hodin je popisek na hranici hodiny (14h = 14:00), bod hodinové hodnoty leží uprostřed hodiny
+  if (scale === 'day') return { lab: i => i % 3 === 0 ? i + 'h' : '', grid: i => i % 6 === 0 && i > 0, edge: true };
   if (scale === 'week' && type === 'line') return { lab: i => i % 24 === 12 && D(i) ? DOW[D(i).getDay()] : '', grid: i => i % 24 === 0 && i > 0 };
   if (scale === 'week') return { lab: i => D(i) ? DOW[D(i).getDay()] : '', grid: () => false };
   if (scale === 'month') return { lab: i => [0, 4, 9, 14, 19, 24, 29].includes(i) ? (i + 1) + '.' : '', grid: () => false };
@@ -860,7 +861,7 @@ function chartOpts(a, b) {
   const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
   const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
-  const o = { type, n, series, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+  const o = { type, n, series, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
   const future = st.scale === 'day' && !b && st.anchor > today();
   if (fcApplicable() && type === 'line') {
     o.fc = fcSeries(model.fc || {}, a.Bk, st.v);
