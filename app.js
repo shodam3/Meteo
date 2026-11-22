@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 15;
+const APP_VERSION = 16;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -366,7 +366,7 @@ async function rain5load(d) {
   finally { setBusy(-1); }
 }
 async function applyRain5(hourly) {
-  const days = [...new Set(hourly.map(r => r.d))];
+  const td = ymd(today()), days = [...new Set(hourly.map(r => r.d))].filter(d => d <= td);
   const res = await Promise.all(days.map(d => rain5(d)));
   const m = new Map(days.map((d, i) => [d, res[i]]));
   let used = 0;
@@ -382,6 +382,119 @@ async function getRange(kind, s, e) {
   const arrs = await Promise.all(months.map(m => getMonth(kind, m)));
   const S = ymd(s), E = ymd(e);
   return arrs.flat().filter(r => r.d >= S && r.d < E);
+}
+
+// ---------- předpovědi modelů (Open-Meteo a yr.no) ----------
+const FC_VARS = ['temp', 'rain', 'wind', 'gust', 'press'];
+const MODELS = [
+  { k: 'aladin', n: 'ALADIN', full: 'ALADIN – ČHMÚ, Česko', om: 'chmi_aladin_seamless', c: '#7C3AED' },
+  { k: 'icon', n: 'ICON', full: 'ICON – DWD, Německo', om: 'dwd_icon_seamless', c: '#BE185D' },
+  { k: 'icond2', n: 'ICON-D2', full: 'ICON-D2 2 km – DWD, Německo', om: 'dwd_icon_d2_native', c: '#DB2777' },
+  { k: 'ecmwf', n: 'ECMWF', full: 'ECMWF IFS 9 km – Evropské centrum', om: 'ecmwf_ifs', c: '#C2410C' },
+  { k: 'yr', n: 'yr.no', full: 'yr.no – MET Norway', yr: true, c: '#2563EB' },
+  { k: 'aifs', n: 'ECMWF AI', full: 'ECMWF AIFS – umělá inteligence', om: 'ecmwf_aifs025_single', c: '#EA580C' },
+  { k: 'aicon', n: 'ICON AI', full: 'AICON – DWD, umělá inteligence', om: 'dwd_aicon_global_native', c: '#EC4899' },
+  { k: 'gfs', n: 'GFS', full: 'GFS – NOAA, USA', om: 'ncep_gfs_seamless', c: '#4338CA' },
+  { k: 'aigfs', n: 'GFS AI', full: 'AIGFS – NOAA, umělá inteligence', om: 'ncep_aigfs025', c: '#6366F1' },
+  { k: 'mf', n: 'Météo-France', full: 'ARPEGE/AROME – Météo-France', om: 'meteofrance_seamless', c: '#1E3A8A' },
+  { k: 'ukmo', n: 'UKMO', full: 'UK Met Office – Velká Británie', om: 'ukmo_seamless', c: '#4D7C0F' },
+  { k: 'gem', n: 'GEM', full: 'GEM – Kanada', om: 'cmc_gem_seamless', c: '#B91C1C' },
+  { k: 'jma', n: 'JMA', full: 'JMA – Japonsko', om: 'jma_seamless', c: '#A16207' },
+  { k: 'cma', n: 'CMA', full: 'CMA GRAPES – Čína', om: 'cma_grapes_global', c: '#9F1239' },
+  { k: 'meteoswiss', n: 'MeteoSwiss', full: 'ICON CH2 – MeteoSwiss, Švýcarsko', om: 'meteoswiss_icon_ch2', c: '#DC2626' },
+  { k: 'geosphere', n: 'GeoSphere', full: 'C-LAEF – GeoSphere, Rakousko', om: 'geosphere_claef_austria', c: '#0F766E' },
+  { k: 'knmi', n: 'KNMI', full: 'Harmonie Evropa – KNMI, Nizozemsko', om: 'knmi_harmonie_arome_europe', c: '#D97706' },
+  { k: 'dmi', n: 'DMI', full: 'Harmonie Evropa – DMI, Dánsko', om: 'dmi_harmonie_arome_europe', c: '#57534E' },
+  { k: 'italia', n: 'ItaliaMeteo', full: 'ICON 2I – ItaliaMeteo, Itálie', om: 'italia_meteo_arpae_icon_2i', c: '#15803D' },
+  { k: 'metno', n: 'MET Nordic', full: 'MET Nordic – Norsko (jen sever Evropy)', om: 'metno_nordic', c: '#475569' }
+];
+const MODEL = Object.fromEntries(MODELS.map(m => [m.k, m]));
+let fcModels = LS.get('meteo.fcmodels', ['aladin', 'icon', 'ecmwf', 'yr']).filter(k => MODEL[k]);
+let fcOn = LS.get('meteo.fcon', null) || fcModels.slice();
+const fcMem = new Map(), fcInflight = new Map();
+const fcStat = () => LS.get('meteo.fcstat', {});
+const setFcStat = (k, v) => { const x = fcStat(); x[k] = v; LS.set('meteo.fcstat', x); };
+const avg2 = (a, b) => a == null ? (b ?? null) : b == null ? a : (a + b) / 2;
+const maxDay = () => st.scale === 'day' ? addDays(today(), 2) : today();
+
+async function omFetch(id) {
+  const q = new URLSearchParams({ latitude: cfg.lat, longitude: cfg.lon, hourly: 'temperature_2m,precipitation,wind_speed_10m,wind_gusts_10m,pressure_msl', models: id, timezone: 'Europe/Prague', forecast_days: '3', wind_speed_unit: 'kmh' });
+  let r; try { r = await fetch('https://api.open-meteo.com/v1/forecast?' + q, { cache: 'no-store' }); } catch { throw new Error('nepodařilo se spojit s Open-Meteo'); }
+  if (!r.ok) { let m = ''; try { m = (await r.json()).reason || ''; } catch { } throw new Error('Open-Meteo ' + r.status + (m ? ': ' + m : '')); }
+  const H = (await r.json()).hourly || {}, t = H.time || [];
+  const T = H.temperature_2m || [], P = H.precipitation || [], W = H.wind_speed_10m || [], G = H.wind_gusts_10m || [], PR = H.pressure_msl || [];
+  // hodnoty k okamžiku → průměr začátku a konce hodiny; srážky a nárazy jsou za předchozí hodinu → bere se konec hodiny
+  return t.map((x, i) => [x.slice(0, 10), Number(x.slice(11, 13)), avg2(T[i], T[i + 1]), P[i + 1] ?? null, avg2(W[i], W[i + 1]), G[i + 1] ?? null, avg2(PR[i], PR[i + 1])]);
+}
+async function yrFetch() {
+  const u = `https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=${Number(cfg.lat).toFixed(4)}&lon=${Number(cfg.lon).toFixed(4)}`;
+  let r; try { r = await fetch(u); } catch { throw new Error('nepodařilo se spojit s yr.no'); }
+  if (!r.ok) throw new Error('yr.no ' + r.status);
+  const ts = ((await r.json()).properties || {}).timeseries || [];
+  const t0 = today(), N = 73, idx = d => Math.round((d - t0) / 3600e3);
+  const inst = { t: new Array(N).fill(null), w: new Array(N).fill(null), g: new Array(N).fill(null), p: new Array(N).fill(null) }, rain = new Array(N).fill(null);
+  for (const e of ts) {
+    const d = new Date(e.time), i = idx(d); if (i < 0 || i >= N) continue;
+    const det = ((e.data || {}).instant || {}).details || {};
+    inst.t[i] = num(det.air_temperature); inst.p[i] = num(det.air_pressure_at_sea_level);
+    inst.w[i] = det.wind_speed != null ? det.wind_speed * 3.6 : null; inst.g[i] = det.wind_speed_of_gust != null ? det.wind_speed_of_gust * 3.6 : null;
+    const n1 = ((e.data || {}).next_1_hours || {}).details, n6 = ((e.data || {}).next_6_hours || {}).details;
+    if (n1 && n1.precipitation_amount != null) rain[i] = n1.precipitation_amount;
+    else if (n6 && n6.precipitation_amount != null) for (let k = 0; k < 6 && i + k < N; k++) if (rain[i + k] == null) rain[i + k] = n6.precipitation_amount / 6;
+  }
+  // doplnění mezer (mimo první dva dny dává yr.no hodnoty po 6 hodinách)
+  for (const a of Object.values(inst)) {
+    let last = -1;
+    for (let i = 0; i < N; i++) if (a[i] != null) { if (last >= 0 && i - last > 1 && i - last <= 6) for (let k = last + 1; k < i; k++) a[k] = a[last] + (a[i] - a[last]) * (k - last) / (i - last); last = i; }
+  }
+  const out = [];
+  for (let i = 0; i < N - 1; i++) {
+    const d = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate(), i);
+    const g = inst.g[i] == null ? inst.g[i + 1] : inst.g[i + 1] == null ? inst.g[i] : Math.max(inst.g[i], inst.g[i + 1]);
+    out.push([ymd(d), d.getHours(), avg2(inst.t[i], inst.t[i + 1]), rain[i] != null ? r2(rain[i]) : null, avg2(inst.w[i], inst.w[i + 1]), g, avg2(inst.p[i], inst.p[i + 1])]);
+  }
+  return out;
+}
+function fcGet(k) {
+  if (fcInflight.has(k)) return fcInflight.get(k);
+  const p = fcLoad(k).finally(() => fcInflight.delete(k)); fcInflight.set(k, p); return p;
+}
+async function fcLoad(k) {
+  const m = MODEL[k], ttl = m.yr ? 3 * 3600e3 : 3600e3, loc = cfg.lat + ',' + cfg.lon, day = ymd(today());
+  const c = fcMem.get(k) || LS.get('meteo.fc.' + k, null);
+  if (c && c.loc === loc && c.day === day && Date.now() - c.at < ttl) { fcMem.set(k, c); return c; }
+  try {
+    const rows = m.yr ? await yrFetch() : await omFetch(m.om);
+    const has = rows.some(x => x[2] != null);
+    const e = { at: Date.now(), loc, day, rows: has ? rows : [] };
+    fcMem.set(k, e); LS.set('meteo.fc.' + k, e); setFcStat(k, has ? 'ok' : 'nodata');
+    return e;
+  } catch (err) {
+    setFcStat(k, 'err'); note(m.n + ': ' + err.message);
+    if (c) return c; throw err;
+  }
+}
+function fcApplicable() {
+  if (st.scale !== 'day' || st.cmp || !FC_VARS.includes(st.v) || cfg.lat == null) return false;
+  const dd = dayDiff(today(), st.anchor); return dd >= 0 && dd <= 2;
+}
+async function loadForecasts() {
+  if (!fcApplicable()) return {};
+  const keys = fcModels.filter(k => fcOn.includes(k));
+  const res = await Promise.allSettled(keys.map(fcGet));
+  const out = {}; keys.forEach((k, i) => { if (res[i].status === 'fulfilled') out[k] = res[i].value; });
+  return out;
+}
+const FCI = { temp: 2, rain: 3, wind: 4, gust: 5, press: 6 };
+function fcSeries(fc, Bk, v) {
+  const out = [];
+  for (const k of fcModels) {
+    if (!fcOn.includes(k) || !fc[k] || !fc[k].rows.length) continue;
+    const mp = new Map(fc[k].rows.map(x => [x[0] + '|' + x[1], x]));
+    const vals = Bk.map(b => { const x = mp.get(b.d + '|' + b.h); return x && x[FCI[v]] != null ? x[FCI[v]] : null; });
+    if (vals.some(x => x != null)) out.push({ k, n: MODEL[k].n, color: MODEL[k].c, vals });
+  }
+  return out;
 }
 
 // ---------- období ----------
@@ -410,7 +523,7 @@ function periodLabel(p) {
   const s = p.s, e = addDays(p.e, -1), t = today();
   if (p.scale === 'day') {
     const dd = dayDiff(s, t);
-    return { t: `${DOWL[s.getDay()]} ${s.getDate()}. ${s.getMonth() + 1}. ${s.getFullYear()}`, s: dd === 0 ? 'dnes' : dd === 1 ? 'včera' : '' };
+    return { t: `${DOWL[s.getDay()]} ${s.getDate()}. ${s.getMonth() + 1}. ${s.getFullYear()}`, s: dd === 0 ? 'dnes' : dd === 1 ? 'včera' : dd === -1 ? 'zítra · předpověď' : dd === -2 ? 'pozítří · předpověď' : '' };
   }
   if (p.scale === 'week') {
     const a = s.getFullYear() !== e.getFullYear() ? `${s.getDate()}. ${s.getMonth() + 1}. ${s.getFullYear()}`
@@ -529,9 +642,10 @@ function drawChart(el, o) {
     if (s.band) for (const b of s.band) if (b) { if (b[0] != null) all.push(b[0]); if (b[1] != null) all.push(b[1]); }
   }
   // měřítko osy se počítá ze všech hodnot (max, min i průměr), aby se při přepínání neměnilo
+  if (o.fc) for (const f of o.fc) for (const v of f.vals) if (v != null) all.push(v);
   const hasData = all.length > 0;
   if (o.extra) for (const v of o.extra) if (v != null) all.push(v);
-  if (!hasData) { el.innerHTML = '<div class="empty">Pro toto období nejsou žádná data.</div>'; return null; }
+  if (!hasData) { el.innerHTML = `<div class="empty">${o.emptyMsg || 'Pro toto období nejsou žádná data.'}</div>`; return null; }
   let mn = all[0], mx = all[0]; for (const v of all) { if (v < mn) mn = v; if (v > mx) mx = v; }
   const sc = nice(mn, mx, o.zero);
   const L = 36, R = 6, Bm = 22, n = o.n, slot = (W - L - R) / n;
@@ -583,6 +697,17 @@ function drawChart(el, o) {
       s += '</g>';
     }
   } else {
+    if (o.now != null) {
+      const xn = f1(L + slot * o.now);
+      s += `<rect x="${xn}" y="${T}" width="${f1(Math.max(0, W - R - xn))}" height="${f1(plotH)}" fill="#F5F6F8"/>`
+        + `<line x1="${xn}" y1="${T}" x2="${xn}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.6"/>`
+        + `<text x="${f1(Number(xn) + 4)}" y="${T + 10}" font-size="10" font-weight="700" fill="#111827">teď</text>`;
+    }
+    if (o.fc) for (const f of o.fc) {
+      let d = '', run = 0;
+      f.vals.forEach((v, i) => { if (v == null) { run = 0; return; } d += (run ? 'L' : 'M') + f1(xc(i)) + ' ' + f1(y(v)); run++; });
+      if (d) s += `<path d="${d}" fill="none" stroke="${f.color}" stroke-opacity="0.9" stroke-width="1.5" stroke-dasharray="4 3" stroke-linejoin="round"/>`;
+    }
     o.series.forEach((se, k) => {
       const col = k === 0 ? 'url(#gL)' : '#C2410C';
       if (se.band) {
@@ -604,6 +729,7 @@ function drawChart(el, o) {
   }
   if (o.sel != null && o.sel < n) {
     s += `<line x1="${f1(xc(o.sel))}" y1="${T}" x2="${f1(xc(o.sel))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-opacity="0.5"/>`;
+    if (o.type === 'line' && o.fc) for (const f of o.fc) { const v = f.vals[o.sel]; if (v != null) s += `<circle cx="${f1(xc(o.sel))}" cy="${f1(y(v))}" r="3" fill="#fff" stroke="${f.color}" stroke-width="1.5"/>`; }
     if (o.type === 'line') o.series.forEach((se, k) => { const v = se.vals[o.sel]; if (v != null) s += `<circle cx="${f1(xc(o.sel))}" cy="${f1(y(v))}" r="4" fill="#fff" stroke="${k ? '#C2410C' : '#10A9C4'}" stroke-width="2"/>`; });
   }
   s += '</svg>';
@@ -641,7 +767,7 @@ function renderControls() {
   const t = today();
   const navHtml = (which, anchor) => {
     const p = periodOf(st.scale, anchor), lb = periodLabel(p);
-    const nextDis = periodOf(st.scale, shift(st.scale, anchor, 1)).s > t;
+    const nextDis = periodOf(st.scale, shift(st.scale, anchor, 1)).s > (which === 'a' ? maxDay() : t);
     const boxed = st.cmp ? ` boxed${which === 'b' ? ' b' : ''}` : '';
     const leg = st.cmp ? `<span class="leg${which === 'b' ? ' b' : ''}"></span>` : '';
     return `<div class="nav${boxed}">
@@ -674,9 +800,13 @@ async function refresh() {
     $('summary').innerHTML = ''; $('info').innerHTML = '';
   }, 250);
   try {
+    const fcP = loadForecasts().catch(() => ({}));
     const [A, B] = await Promise.all([load(pA), pB ? load(pB) : null]);
     if (my !== seq) return;
-    model = { A, B }; showErr(''); draw();
+    model = { A, B, fc: {} }; showErr(''); draw();
+    const fc = await fcP;
+    if (my !== seq || !model) return;
+    model.fc = fc; if (Object.keys(fc).length) draw();
   } catch (err) {
     if (my !== seq) return;
     model = null; current = null; showErr(err.message);
@@ -690,32 +820,61 @@ function extraVals(a, b) {
   for (const X of [a, b]) if (X) for (const x of X.vals) out.push(x.hi, noMin ? x.avg : x.lo);
   return out;
 }
-function draw() {
-  if (!model) return;
-  const { A, B } = model, type = chartType(), V = VARS[st.v];
-  const mk = X => { const Bk = buildBuckets(st.scale, type, X.p); fillBuckets(Bk, X.h, X.d); return { Bk, vals: bucketVals(Bk, st.v, curMode()) }; };
-  const a = mk(A), b = B ? mk(B) : null;
+function chartOpts(a, b) {
+  const type = chartType(), V = VARS[st.v];
   const n = Math.max(a.Bk.length, b ? b.Bk.length : 0);
   const padTo = arr => { const r = arr.slice(); while (r.length < n) r.push(null); return r; };
   const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
   const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
-  if (st.sel != null && st.sel >= n) st.sel = null;
-  const geo = drawChart($('chart'), { type, n, series, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(A.p).t}` });
-  current = { a, b, geo };
-  renderInfo(); renderSummary();
+  const o = { type, n, series, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+  const future = st.scale === 'day' && !b && st.anchor > today();
+  if (fcApplicable() && type === 'line') {
+    o.fc = fcSeries(model.fc || {}, a.Bk, st.v);
+    if (dayDiff(today(), st.anchor) === 0) { const nw = new Date(); o.now = nw.getHours() + nw.getMinutes() / 60; }
+  }
+  if (future) o.emptyMsg = !FC_VARS.includes(st.v) ? 'Předpověď pro tuto veličinu není k dispozici.'
+    : type !== 'line' ? 'Předpověď se zobrazuje jen v čárovém grafu.'
+    : !fcModels.length ? 'Nejsou vybrané žádné modely předpovědi (nastavení).'
+    : !fcModels.some(k => fcOn.includes(k)) ? 'Zapněte některý model pod grafem.'
+    : cfg.lat == null ? 'Čekám na polohu stanice…' : 'Načítám předpověď…';
+  return o;
+}
+function draw() {
+  if (!model) return;
+  const { A, B } = model;
+  const mk = X => { const Bk = buildBuckets(st.scale, chartType(), X.p); fillBuckets(Bk, X.h, X.d); return { Bk, vals: bucketVals(Bk, st.v, curMode()) }; };
+  const a = mk(A), b = B ? mk(B) : null;
+  if (st.sel != null && st.sel >= Math.max(a.Bk.length, b ? b.Bk.length : 0)) st.sel = null;
+  const o = chartOpts(a, b);
+  current = { a, b, fc: o.fc || null, geo: drawChart($('chart'), o) };
+  renderFcBar(); renderInfo(); renderSummary();
 }
 // při posouvání prstem se překresluje jen graf a řádek s hodnotami
 function drawGraphOnly() {
   if (!current || !model) return;
-  const { a, b } = current, type = chartType(), V = VARS[st.v];
-  const n = Math.max(a.Bk.length, b ? b.Bk.length : 0);
-  const padTo = arr => { const r = arr.slice(); while (r.length < n) r.push(null); return r; };
-  const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
-  const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
-  if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
-  current.geo = drawChart($('chart'), { type, n, series, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` });
+  const o = chartOpts(current.a, current.b);
+  current.fc = o.fc || null; current.geo = drawChart($('chart'), o);
   renderInfo();
+}
+function renderFcBar() {
+  const el = $('fcbar');
+  if (!fcApplicable() || chartType() !== 'line' || !fcModels.length) { el.hidden = true; el.innerHTML = ''; return; }
+  const stt = fcStat();
+  el.hidden = false;
+  el.innerHTML = '<span class="fcl">Předpověď:</span>' + fcModels.map(k => {
+    const m = MODEL[k], on = fcOn.includes(k), bad = stt[k] === 'nodata';
+    return `<button class="fcb${on && !bad ? ' on' : ''}${bad ? ' bad' : ''}" data-fc="${k}" aria-pressed="${on}" style="--c:${m.c}"${bad ? ' title="Pro vaši polohu nemá data"' : ''}>${esc(m.n)}${bad ? ' ✕' : ''}</button>`;
+  }).join('');
+}
+function fcTableHtml(fc, Bk, v, title) {
+  const V = VARS[v], rows = fcSeries(fc, Bk, v);
+  if (!rows.length) return '';
+  const cols = v === 'rain' ? [['Úhrn', x => x.sum]] : V.noMin ? [['Maximum', x => x.hi], ['Průměr', x => x.avg]] : [['Maximum', x => x.hi], ['Minimum', x => x.lo], ['Průměr', x => x.avg]];
+  const st2 = vals => { const a = vals.filter(x => x != null); if (!a.length) return {}; return { hi: Math.max(...a), lo: Math.min(...a), avg: a.reduce((p, q) => p + q, 0) / a.length, sum: a.reduce((p, q) => p + q, 0) }; };
+  return `<h2 style="margin:0 0 8px">${esc(title)}</h2><table class="cmp fct"><thead><tr><th>model</th>${cols.map(c => `<th>${c[0]}</th>`).join('')}</tr></thead><tbody>`
+    + rows.map(r => { const x = st2(r.vals); return `<tr><td style="color:${r.color};font-weight:700">${esc(r.n)}</td>${cols.map(c => `<td>${fmt(c[1](x), V.dec)}${V.u ? ' ' + esc(V.u) : ''}</td>`).join('')}</tr>`; }).join('')
+    + '</tbody></table>';
 }
 
 function renderInfo() {
@@ -731,7 +890,8 @@ function renderInfo() {
   };
   const bk = c.a.Bk[i];
   const drill = bk && (bk.k === 'd' || bk.k === 'm') ? `<button class="drill" id="btnDrill">${bk.k === 'd' ? 'Den' : 'Měsíc'} ›</button>` : '';
-  el.innerHTML = `<div>${line(c.a, 'a')}${c.b ? line(c.b, 'b') : ''}</div>${drill}`;
+  const fcl = c.fc && c.fc.length ? `<div class="muted" style="font-size:12px;margin-top:2px">${c.fc.filter(f => f.vals[i] != null).map(f => `<span style="color:${f.color};font-weight:600">${esc(f.n)}</span> ${fmt(f.vals[i], V.dec)}`).join(' · ')}</div>` : '';
+  el.innerHTML = `<div>${line(c.a, 'a')}${c.b ? line(c.b, 'b') : ''}${fcl}</div>${drill}`;
   if (drill) $('btnDrill').onclick = () => {
     const toDate = x => x.k === 'd' ? parseYmd(x.d) : parseYmd(x.m + '-01');
     const bb = c.b && c.b.Bk[i];
@@ -746,6 +906,16 @@ function renderSummary() {
   const el = $('summary'), V = VARS[st.v];
   if (!model) { el.innerHTML = ''; return; }
   const { A, B } = model;
+  const fcCard = $('fcCard'), dd = dayDiff(today(), st.anchor);
+  const fcHtml = fcApplicable() && chartType() === 'line' && current ? fcTableHtml(model.fc || {}, current.a.Bk, st.v, 'Předpověď na celý den') : '';
+  $('btnCmp').hidden = st.scale === 'day' && dd > 0 && !B;
+  if (!B && st.scale === 'day' && dd > 0) {
+    fcCard.hidden = true;
+    $('sumTitle').textContent = 'Předpověď na celý den';
+    el.innerHTML = fcHtml ? fcHtml.replace(/^<h2[^>]*>.*?<\/h2>/, '') : '<p class="note">Předpověď je k dispozici pro teplotu, srážky, vítr, nárazy a tlak v čárovém grafu.</p>';
+    return;
+  }
+  fcCard.hidden = !fcHtml || !!B; fcCard.innerHTML = fcHtml;
   if (!B) {
     const items = summary(st.v, st.scale, A.h, A.d);
     if (!A.d.length && !A.h.length) { el.innerHTML = '<p class="note">Pro toto období nejsou žádná data.</p>'; return; }
@@ -796,8 +966,21 @@ function renderStatus() {
   const t = today(), dt = `${DOWL[t.getDay()]} ${t.getDate()}. ${t.getMonth() + 1}. ${t.getFullYear()}`;
   s.innerHTML = `<span class="today">${esc(dt.charAt(0).toUpperCase() + dt.slice(1))}</span>` + (txt ? ' · ' + esc(txt) : ''); s.classList.toggle('warn', warn);
 }
+// poloha stanice pro předpovědi; vrací true, když byla zjištěna poprvé
+function setCoords(o) {
+  const la = num(o.lat), lo = num(o.lon);
+  if (la == null || lo == null || (cfg.lat === la && cfg.lon === lo)) return false;
+  const first = cfg.lat == null; cfg.lat = la; cfg.lon = lo; LS.set('meteo.cfg', cfg);
+  return first;
+}
 async function loadCurrent() {
-  try { const o = (await wuGet('observations/current'))[0]; if (o) { cur = o; renderCurrent(); } }
+  try {
+    const o = (await wuGet('observations/current'))[0];
+    if (o) {
+      cur = o; renderCurrent();
+      if (setCoords(o) && st.scale === 'day') refresh();
+    }
+  }
   catch (err) { note(err.message); }
 }
 
@@ -873,7 +1056,7 @@ function openPicker(which) {
     closeSheet('picker'); st.sel = null; refresh();
   };
   $('pkOk').onclick = () => {
-    let d = get(); if (d > t) d = t;
+    let d = get(); const mx = which === 'b' ? t : maxDay(); if (d > mx) d = mx;
     if (which === 'b') st.cmp = d; else st.anchor = d;
     closeSheet('picker'); st.sel = null; refresh();
   };
@@ -887,7 +1070,7 @@ function navigate(which, d) {
   if (which === 'a' || which === 'both') st.anchor = shift(st.scale, st.anchor, d);
   if (st.cmp && (which === 'b' || which === 'both')) st.cmp = shift(st.scale, st.cmp, d);
   const t = today();
-  if (periodOf(st.scale, st.anchor).s > t) st.anchor = t;
+  if (periodOf(st.scale, st.anchor).s > maxDay()) st.anchor = maxDay();
   if (st.cmp && periodOf(st.scale, st.cmp).s > t) st.cmp = t;
   st.sel = null; refresh();
 }
@@ -906,7 +1089,24 @@ function bindUI() {
   });
   $('pkCancel').onclick = () => { closeSheet('picker'); };
   $('picker').addEventListener('click', e => { if (e.target === $('picker')) closeSheet('picker'); });
-  $('btnCmp').onclick = () => { st.cmp = st.cmp ? null : yearAgo(st.anchor); st.sel = null; refresh(); };
+  $('btnCmp').onclick = () => { st.cmp = st.cmp ? null : yearAgo(st.anchor > today() ? today() : st.anchor); if (st.cmp && st.anchor > today()) st.anchor = today(); st.sel = null; refresh(); };
+  $('fcbar').addEventListener('click', async e => {
+    const b = e.target.closest('[data-fc]'); if (!b) return;
+    const k = b.dataset.fc;
+    fcOn = fcOn.includes(k) ? fcOn.filter(x => x !== k) : fcOn.concat(k); LS.set('meteo.fcon', fcOn);
+    if (fcOn.includes(k) && model && !(model.fc || {})[k]) {
+      draw();
+      try { const e2 = await fcGet(k); if (model) { model.fc = { ...(model.fc || {}), [k]: e2 }; } } catch { }
+    }
+    draw();
+  });
+  $('fcModels').addEventListener('change', e => {
+    const c = e.target.closest('input[data-m]'); if (!c) return;
+    const k = c.dataset.m;
+    fcModels = MODELS.map(m => m.k).filter(x => x === k ? c.checked : fcModels.includes(x)); LS.set('meteo.fcmodels', fcModels);
+    if (c.checked && !fcOn.includes(k)) { fcOn = fcOn.concat(k); LS.set('meteo.fcon', fcOn); }
+    refresh();
+  });
   // graf: podržení prstu = svislá čára s hodnotami, kterou lze posouvat; rychlé přejetí do strany = jiné období; klepnutí = skrýt čáru
   const ch = $('chart'); let press = null, lastTouch = 0;
   const selectAt = x => {
@@ -949,6 +1149,8 @@ function bindUI() {
     const q = LS.get('meteo.quota', { d: '', n: 0 });
     const hm = k => HMODE_NAMES[LS.get('meteo.hmode.' + k, '')] || 'zatím nezjištěno';
     $('quota').textContent = `Dotazů na Weather Underground dnes: ${q.d === ymd(today()) ? q.n : 0} (bezpečný limit 1400).\nStahování historie – hodinová data: ${hm('hourly')}, denní souhrny: ${hm('daily')}.\nVerze aplikace: ${APP_VERSION}`;
+    const stt = fcStat(), lbl = { ok: '', nodata: ' · pro vaši polohu nemá data', err: ' · poslední načtení selhalo' };
+    $('fcModels').innerHTML = MODELS.map(m => `<label class="chk"><input type="checkbox" data-m="${m.k}"${fcModels.includes(m.k) ? ' checked' : ''}><span class="sw" style="background:${m.c}"></span><span>${esc(m.full)}<small>${lbl[stt[m.k]] || ''}</small></span></label>`).join('');
     $('setMsg').textContent = ''; $('setMsg').className = 'msg'; openSheet('settings');
   };
   $('btnSettings').onclick = open;
@@ -966,7 +1168,7 @@ function bindUI() {
     try {
       const o = (await wuGet('observations/current'))[0];
       if (!o) throw new Error('Stanice nevrátila žádná aktuální data. Zkontrolujte ID stanice.');
-      cur = o; lines.push(`✓ Weather Underground: stanice ${cfg.station}${o.neighborhood ? ' (' + o.neighborhood + ')' : ''} funguje.`);
+      cur = o; setCoords(o); lines.push(`✓ Weather Underground: stanice ${cfg.station}${o.neighborhood ? ' (' + o.neighborhood + ')' : ''} funguje.`);
     } catch (err) { ok = false; lines.push('✗ ' + err.message); }
     if (cfg.ghToken) {
       try { const n = await gh.verify(); lines.push(`✓ GitHub: data se budou ukládat do soukromého repozitáře ${n}.`); }
