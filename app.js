@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 35;
+const APP_VERSION = 36;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -771,7 +771,8 @@ function drawChart(el, o) {
       f.vals.forEach((v, i) => { if (v == null) { run = 0; return; } d += (run ? 'L' : 'M') + f1(xc(i)) + ' ' + f1(y(v)); run++; });
       if (d) s += `<path d="${d}" fill="none" stroke="${f.color}" stroke-opacity="0.9" stroke-width="1.5" stroke-dasharray="4 3" stroke-linejoin="round"/>`;
     }
-    o.series.forEach((se, k) => {
+    // druhé období se kreslí jako první, aby bylo v pozadí
+    o.series.map((se, k) => [se, k]).reverse().forEach(([se, k]) => {
       const col = k === 0 ? 'url(#gL)' : '#C2410C';
       if (se.band) {
         let seg = [];
@@ -796,7 +797,7 @@ function drawChart(el, o) {
       if (run === 1) s += `<circle cx="${f1(xc(lastI))}" cy="${f1(y(se.vals[lastI]))}" r="2.2" fill="${col}"/>`;
       // dokreslení k aktuálnímu měření (probíhající hodina ještě nemá hodinový záznam)
       if (k === 0 && o.tail && lastI >= 0 && o.tail.x > lastI + 0.5) d += (d ? 'L' : 'M') + f1(L + slot * o.tail.x) + ' ' + f1(y(o.tail.v));
-      if (d) s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${o.thin ? 1.3 : n > 100 ? 1.8 : 2.4}" stroke-linejoin="round" stroke-linecap="round"${k ? ' stroke-dasharray="6 4"' : ''}/>`;
+      if (d) s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${o.thin ? 1.3 : n > 100 ? 1.8 : 2.4}" stroke-linejoin="round" stroke-linecap="round"${k ? ' stroke-opacity="0.85"' : ''}/>`;
     });
   }
   if (o.sel != null && o.sel < n) {
@@ -871,7 +872,7 @@ function drawFine(el, o) {
   s += '</g>';
   if (o.now != null) s += `<line x1="${f1(x(o.now))}" y1="${T}" x2="${f1(x(o.now))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.45"/>`;
   for (const f of o.fc || []) s += `<path d="${monoPath(px(f.pts))}" fill="none" stroke="${f.color}" stroke-opacity="0.9" stroke-width="1.5" stroke-dasharray="4 3"/>`;
-  if (o.b) for (const sg of segments(o.b)) s += `<path d="${monoPath(px(sg))}" fill="none" stroke="#C2410C" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round" stroke-linecap="round"/>`;
+  if (o.b) for (const sg of segments(o.b)) s += `<path d="${monoPath(px(sg))}" fill="none" stroke="#C2410C" stroke-opacity="0.85" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
   if (o.a) for (const sg of segments(o.a)) {
     const d = monoPath(px(sg));
     // podkres od čáry dolů k ose
