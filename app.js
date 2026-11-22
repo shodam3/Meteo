@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 16;
+const APP_VERSION = 17;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -404,9 +404,8 @@ const MODELS = [
   { k: 'meteoswiss', n: 'MeteoSwiss', full: 'ICON CH2 – MeteoSwiss, Švýcarsko', om: 'meteoswiss_icon_ch2', c: '#DC2626' },
   { k: 'geosphere', n: 'GeoSphere', full: 'C-LAEF – GeoSphere, Rakousko', om: 'geosphere_claef_austria', c: '#0F766E' },
   { k: 'knmi', n: 'KNMI', full: 'Harmonie Evropa – KNMI, Nizozemsko', om: 'knmi_harmonie_arome_europe', c: '#D97706' },
-  { k: 'dmi', n: 'DMI', full: 'Harmonie Evropa – DMI, Dánsko', om: 'dmi_harmonie_arome_europe', c: '#57534E' },
-  { k: 'italia', n: 'ItaliaMeteo', full: 'ICON 2I – ItaliaMeteo, Itálie', om: 'italia_meteo_arpae_icon_2i', c: '#15803D' },
-  { k: 'metno', n: 'MET Nordic', full: 'MET Nordic – Norsko (jen sever Evropy)', om: 'metno_nordic', c: '#475569' }
+  { k: 'dmi', n: 'DMI', full: 'Harmonie Evropa – DMI, Dánsko', om: 'dmi_harmonie_arome_europe', c: '#57534E' }
+
 ];
 const MODEL = Object.fromEntries(MODELS.map(m => [m.k, m]));
 let fcModels = LS.get('meteo.fcmodels', ['aladin', 'icon', 'ecmwf', 'yr']).filter(k => MODEL[k]);
@@ -699,9 +698,7 @@ function drawChart(el, o) {
   } else {
     if (o.now != null) {
       const xn = f1(L + slot * o.now);
-      s += `<rect x="${xn}" y="${T}" width="${f1(Math.max(0, W - R - xn))}" height="${f1(plotH)}" fill="#F5F6F8"/>`
-        + `<line x1="${xn}" y1="${T}" x2="${xn}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.6"/>`
-        + `<text x="${f1(Number(xn) + 4)}" y="${T + 10}" font-size="10" font-weight="700" fill="#111827">teď</text>`;
+      s += `<line x1="${xn}" y1="${T}" x2="${xn}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.45"/>`;
     }
     if (o.fc) for (const f of o.fc) {
       let d = '', run = 0;
