@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 13;
+const APP_VERSION = 14;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -975,6 +975,21 @@ function bindUI() {
     renderCurrent();
     if (ok) setTimeout(() => { closeSheet('settings'); }, 1200);
     refresh();
+  };
+  $('btnDiag').onclick = async () => {
+    const out = $('diag'); out.hidden = false; out.textContent = 'Stahuji…';
+    const y = addDays(today(), -1), ds = compact(y);
+    const f = v => v == null ? '–' : String(v);
+    const row = o => { const m = o.metric || {}; return `${String(o.obsTimeLocal || '').slice(11, 16)}  vítr ${f(m.windspeedLow)} / ${f(m.windspeedAvg)} / ${f(m.windspeedHigh)}   nárazy ${f(m.windgustLow)} / ${f(m.windgustAvg)} / ${f(m.windgustHigh)}`; };
+    try {
+      const hr = await wuGet('history/hourly', { date: ds });
+      const al = await wuGet('history/all', { date: ds });
+      const pick = (arr, a, b) => arr.filter(o => { const h = Number(String(o.obsTimeLocal || '').slice(11, 13)); return h >= a && h < b; });
+      out.textContent = `Včera (${y.getDate()}. ${y.getMonth() + 1}.), hodnoty min / průměr / max v km/h\n\n`
+        + `HODINOVÁ DATA 10:00–16:00:\n${pick(hr, 10, 16).map(row).join('\n') || 'žádná'}\n\n`
+        + `PODROBNÁ DATA 12:00–13:00:\n${pick(al, 12, 13).map(row).join('\n') || 'žádná'}\n\n`
+        + `Ukázka jednoho hodinového záznamu:\n${JSON.stringify(pick(hr, 12, 13)[0] || hr[0] || {}, null, 1).slice(0, 1500)}`;
+    } catch (err) { out.textContent = 'Chyba: ' + err.message; }
   };
   $('btnClear').onclick = async () => {
     if (!confirm('Smazat data uložená v tomto telefonu? Data na Weather Underground a na GitHubu zůstanou.')) return;
