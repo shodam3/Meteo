@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 30;
+const APP_VERSION = 31;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -57,15 +57,17 @@ const st = {
   scale: ['day', 'week', 'month', 'year'].includes(saved.scale) ? saved.scale : 'week',
   v: VARS[saved.v] ? saved.v : 'temp',
   mode: ['max', 'min', 'avg'].includes(saved.mode) ? saved.mode : 'avg',
+  modes: saved.modes || {},
   charts: saved.charts || {},
   anchor: today(),
   cmp: null,
   sel: null
 };
-const saveView = () => LS.set('meteo.view', { scale: st.scale, v: st.v, mode: st.mode, charts: st.charts });
+const saveView = () => LS.set('meteo.view', { scale: st.scale, v: st.v, mode: st.mode, modes: st.modes, charts: st.charts });
 const chartType = () => VARS[st.v].barOnly ? 'bar' : (st.charts[st.v] || VARS[st.v].chart);
 // u větru a nárazů WU jako minimum posílá okamžité hodnoty (téměř vždy 0), volba Min se proto nenabízí
-const curMode = () => VARS[st.v].barOnly ? 'max' : VARS[st.v].noMin && st.mode === 'min' ? 'avg' : st.mode;
+// volba Max / Min / Průměr se pamatuje pro každou veličinu zvlášť
+const curMode = () => { const m = st.modes[st.v] || st.mode; return VARS[st.v].noMin && m === 'min' ? 'avg' : m; };
 
 // ---------- úložiště v telefonu (IndexedDB) ----------
 const idb = {
@@ -794,7 +796,7 @@ function drawChart(el, o) {
       if (run === 1) s += `<circle cx="${f1(xc(lastI))}" cy="${f1(y(se.vals[lastI]))}" r="2.2" fill="${col}"/>`;
       // dokreslení k aktuálnímu měření (probíhající hodina ještě nemá hodinový záznam)
       if (k === 0 && o.tail && lastI >= 0 && o.tail.x > lastI + 0.5) d += (d ? 'L' : 'M') + f1(L + slot * o.tail.x) + ' ' + f1(y(o.tail.v));
-      if (d) s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${n > 100 ? 1.8 : 2.4}" stroke-linejoin="round" stroke-linecap="round"${k ? ' stroke-dasharray="6 4"' : ''}/>`;
+      if (d) s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${o.thin ? 1.3 : n > 100 ? 1.8 : 2.4}" stroke-linejoin="round" stroke-linecap="round"${k ? ' stroke-dasharray="6 4"' : ''}/>`;
     });
   }
   if (o.sel != null && o.sel < n) {
@@ -875,7 +877,7 @@ function drawFine(el, o) {
     // podkres od čáry dolů k ose
     const base = f1(y(sc.lo)), x0 = f1(x(sg[0][0])), x1 = f1(x(sg[sg.length - 1][0]));
     s += `<path d="${d}L${x1} ${base}L${x0} ${base}Z" fill="url(#gW)" fill-opacity="0.25" stroke="none"/>`
-      + `<path d="${d}" fill="none" stroke="url(#gL)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`;
+      + `<path d="${d}" fill="none" stroke="url(#gL)" stroke-width="${o.thin ? 1.3 : 2.4}" stroke-linejoin="round" stroke-linecap="round"/>`;
   }
   if (o.sel != null) {
     s += `<line x1="${f1(x(o.sel))}" y1="${T}" x2="${f1(x(o.sel))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-opacity="0.5"/>`;
@@ -915,7 +917,7 @@ function renderControls() {
   for (const b of $('scales').children) { const on = b.dataset.s === st.scale; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
   for (const b of $('types').children) { const on = b.dataset.t === chartType(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
   const V = VARS[st.v];
-  $('modes').style.visibility = V.kind === 'sum' || V.barOnly || (st.scale === 'day' && chartType() === 'line') ? 'hidden' : '';
+  $('modes').style.visibility = V.kind === 'sum' || (st.scale === 'day' && chartType() === 'line') ? 'hidden' : '';
   $('types').style.visibility = V.barOnly ? 'hidden' : '';
   for (const b of $('modes').children) { const on = b.dataset.m === curMode(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); b.hidden = b.dataset.m === 'min' && !!V.noMin; }
   $('modes').className = 'seg small ' + (V.noMin ? 's2m' : 's3');
@@ -1008,7 +1010,7 @@ function chartOpts(a, b) {
   const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
   const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
-  const o = { type, n, series, cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+  const o = { type, n, series, thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
   const future = st.scale === 'day' && !b && st.anchor > today();
   // čárový graf dne z podrobných měření
   if (st.scale === 'day' && type === 'line' && (model.A.fine || future || (b && model.B && model.B.fine))) {
@@ -1024,7 +1026,7 @@ function chartOpts(a, b) {
       return pts.length ? pts : null;
     };
     const isT = dayDiff(today(), st.anchor) === 0;
-    const fo = { fine: true, cap: V.cap, a: toPts(model.A, isT), b: b ? toPts(model.B, false) : null, zero: !!V.zero, dec: V.dec, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+    const fo = { fine: true, thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, a: toPts(model.A, isT), b: b ? toPts(model.B, false) : null, zero: !!V.zero, dec: V.dec, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
     if (fcApplicable()) fo.fc = fcFine(model.fc || {}, ymd(st.anchor), st.v);
     if (isT && !b) { const nw = new Date(); fo.now = nw.getHours() * 60 + nw.getMinutes(); }
     if (future) fo.emptyMsg = !FC_VARS.includes(st.v) ? 'Předpověď pro tuto veličinu není k dispozici.'
@@ -1315,7 +1317,7 @@ function bindUI() {
   });
   $('scales').addEventListener('click', e => { const b = e.target.closest('[data-s]'); if (!b || b.dataset.s === st.scale) return; st.scale = b.dataset.s; st.sel = null; saveView(); refresh(); });
   $('types').addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; st.charts[st.v] = b.dataset.t; st.sel = null; saveView(); renderControls(); draw(); });
-  $('modes').addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (!b) return; st.mode = b.dataset.m; saveView(); renderControls(); draw(); });
+  $('modes').addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (!b) return; st.modes[st.v] = b.dataset.m; saveView(); renderControls(); draw(); });
   $('navs').addEventListener('click', e => {
     const pk = e.target.closest('[data-pick]'); if (pk) { openPicker(pk.dataset.pick); return; }
     const b = e.target.closest('[data-nav]'); if (!b || b.disabled) return; navigate(b.dataset.nav, Number(b.dataset.d));
