@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 18;
+const APP_VERSION = 19;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -345,11 +345,19 @@ function dayDetail(d) {
 }
 const EXT = { temp: ['tempHigh', 'tempLow'], dew: ['dewptHigh', 'dewptLow'], hum: ['humidityHigh', 'humidityLow'], press: ['pressureMax', 'pressureMin'], wind: ['windspeedHigh', null], gust: ['windgustHigh', null], solar: ['solarRadiationHigh', null], uv: ['uvHigh', null] };
 async function rain5load(d) {
-  const key = 'day5/' + d, e = await idb.get(key);
+  const key = 'day5b/' + d, e = await idb.get(key);
   if (e && (e.final || Date.now() - e.fetchedAt < STALE)) return e;
   setBusy(1);
   try {
-    const obs = await wuGet('history/all', { date: d.replace(/-/g, '') });
+    // u dneška bývá historie neúplná, proto se doplní měřeními za posledních 24 hodin
+    let obs = [];
+    const isToday = d === ymd(today());
+    try { obs = await wuGet('history/all', { date: d.replace(/-/g, '') }); } catch (err) { if (!isToday) throw err; }
+    if (isToday) {
+      const x = await wuGet('observations/all/1day');
+      const seen = new Map(); for (const o of obs.concat(x)) { const t = String(o.obsTimeLocal || ''); if (t.startsWith(d)) seen.set(t, o); }
+      obs = [...seen.values()].sort((a, b) => String(a.obsTimeLocal) < String(b.obsTimeLocal) ? -1 : 1);
+    }
     const pts = obs.map(o => ({ t: String(o.obsTimeLocal || ''), c: num((o.metric || {}).precipTotal) }))
       .filter(x => x.t.startsWith(d) && x.c != null);
     let hours = null;
@@ -368,8 +376,8 @@ async function rain5load(d) {
       for (const o of obs) {
         const t = String(o.obsTimeLocal || ''); if (!t.startsWith(d)) continue;
         const m = o.metric || {}, g = f => num(m[f] ?? o[f]), hm = t.slice(11, 16).replace(/^0(\d)/, '$1');
-        const h = g(fh); if (h != null && (x.hi == null || h > x.hi)) { x.hi = h; x.hiT = hm; }
-        if (fl) { const l = g(fl); if (l != null && (x.lo == null || l < x.lo)) { x.lo = l; x.loT = hm; } }
+        const h = g(fh) ?? g(fh.replace(/High$|Max$/, '')); if (h != null && (x.hi == null || h > x.hi)) { x.hi = h; x.hiT = hm; }
+        if (fl) { const l = g(fl) ?? g(fl.replace(/Low$|Min$/, '')); if (l != null && (x.lo == null || l < x.lo)) { x.lo = l; x.loT = hm; } }
       }
       if (x.hi != null) ext[v] = x;
     }
@@ -816,6 +824,7 @@ async function refresh() {
   try {
     const fcP = loadForecasts().catch(() => ({}));
     const [A, B] = await Promise.all([load(pA), pB ? load(pB) : null]);
+    clearTimeout(ph);
     if (my !== seq) return;
     model = { A, B, fc: {} }; showErr(''); draw();
     const fc = await fcP;
@@ -934,8 +943,9 @@ function renderSummary() {
     const items = summary(st.v, st.scale, A.h, A.d);
     const ex = A.ext && A.ext[st.v];
     if (ex && st.scale === 'day') for (const it of items) {
-      if (it.id === 'max' && ex.hi != null) { it.val = ex.hi; it.atText = 'v ' + ex.hiT; }
-      if (it.id === 'min' && ex.lo != null) { it.val = ex.lo; it.atText = 'v ' + ex.loT; }
+      // podrobná měření se použijí, jen když nejsou zjevně neúplná (extrém musí být aspoň takový jako z hodinových dat)
+      if (it.id === 'max' && ex.hi != null && (it.val == null || ex.hi >= it.val - 0.3)) { it.val = ex.hi; it.atText = 'v ' + ex.hiT; }
+      if (it.id === 'min' && ex.lo != null && (it.val == null || ex.lo <= it.val + 0.3)) { it.val = ex.lo; it.atText = 'v ' + ex.loT; }
     }
     if (!A.d.length && !A.h.length) { el.innerHTML = '<p class="note">Pro toto období nejsou žádná data.</p>'; return; }
     const src = st.v === 'rain' && (st.scale === 'day' || st.scale === 'week') && rainSrc ? `<p class="note" style="margin:10px 0 0">${esc(rainSrc)}</p>` : '';
