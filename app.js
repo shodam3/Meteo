@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 19;
+const APP_VERSION = 20;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -665,6 +665,7 @@ function drawChart(el, o) {
   }
   // měřítko osy se počítá ze všech hodnot (max, min i průměr), aby se při přepínání neměnilo
   if (o.fc) for (const f of o.fc) for (const v of f.vals) if (v != null) all.push(v);
+  if (o.tail) all.push(o.tail.v);
   const hasData = all.length > 0;
   if (o.extra) for (const v of o.extra) if (v != null) all.push(v);
   if (!hasData) { el.innerHTML = `<div class="empty">${o.emptyMsg || 'Pro toto období nejsou žádná data.'}</div>`; return null; }
@@ -744,6 +745,8 @@ function drawChart(el, o) {
         d += (run ? 'L' : 'M') + f1(xc(i)) + ' ' + f1(y(v)); run++; lastI = i;
       });
       if (run === 1) s += `<circle cx="${f1(xc(lastI))}" cy="${f1(y(se.vals[lastI]))}" r="2.2" fill="${col}"/>`;
+      // dokreslení k aktuálnímu měření (probíhající hodina ještě nemá hodinový záznam)
+      if (k === 0 && o.tail && lastI >= 0 && o.tail.x > lastI + 0.5) d += (d ? 'L' : 'M') + f1(L + slot * o.tail.x) + ' ' + f1(y(o.tail.v));
       if (d) s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${n > 100 ? 1.8 : 2.4}" stroke-linejoin="round" stroke-linecap="round"${k ? ' stroke-dasharray="6 4"' : ''}/>`;
     });
   }
@@ -855,6 +858,11 @@ function chartOpts(a, b) {
   if (fcApplicable() && type === 'line') {
     o.fc = fcSeries(model.fc || {}, a.Bk, st.v);
     if (dayDiff(today(), st.anchor) === 0) { const nw = new Date(); o.now = nw.getHours() + nw.getMinutes() / 60; }
+  }
+  if (st.scale === 'day' && !b && type === 'line' && dayDiff(today(), st.anchor) === 0 && cur && cur.obsTimeLocal && String(cur.obsTimeLocal).startsWith(ymd(today()))) {
+    const m = cur.metric || {}, cv = { temp: m.temp, dew: m.dewpt, hum: cur.humidity, press: m.pressure, wind: m.windSpeed, gust: m.windGust, solar: cur.solarRadiation, uv: cur.uv }[st.v];
+    const ct = String(cur.obsTimeLocal).slice(11, 16).split(':').map(Number);
+    if (num(cv) != null) o.tail = { x: ct[0] + ct[1] / 60, v: num(cv) };
   }
   if (future) o.emptyMsg = !FC_VARS.includes(st.v) ? 'Předpověď pro tuto veličinu není k dispozici.'
     : type !== 'line' ? 'Předpověď se zobrazuje jen v čárovém grafu.'
