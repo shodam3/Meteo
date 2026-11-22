@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 28;
+const APP_VERSION = 29;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -679,23 +679,20 @@ function cutRecs(X, cut) {
 }
 
 // ---------- graf ----------
-// rozsah osy: data plus rezerva 8 % nahoře i dole (u veličin od nuly jen nahoře); popisky jen v „hezkých“ hodnotách uvnitř rozsahu
+// rozsah osy: zaokrouhlení na celé dílky; když je krajní hodnota blíž k okraji než 8 % rozsahu, přidá se další celý dílek
 function nice(mn, mx, zero) {
   if (zero) mn = Math.min(0, mn);
-  let span = mx - mn;
-  if (span < 1e-9) span = Math.max(Math.abs(mx) * 0.05, 1);
-  const padv = span * 0.08;
-  const lo = zero && mn >= 0 ? 0 : mn - padv, hi = mx + padv;
-  // největší „hezký“ krok, při kterém jsou v rozsahu aspoň 4 popisky
-  const mk = st2 => { const r = []; for (let t = Math.ceil(lo / st2 - 1e-9) * st2; t <= hi + 1e-9; t += st2) r.push(Math.round(t / st2) * st2); return r; };
-  const mag = 10 ** Math.floor(Math.log10(hi - lo));
-  const cands = [10, 5, 2, 1, 0.5, 0.2, 0.1].map(q => q * mag);
-  let step = cands[cands.length - 1], ticks = mk(step);
-  for (const c of cands) { const t = mk(c); if (t.length >= 4) { step = c; ticks = t; break; } }
+  if (mx - mn < 1e-9) { mn -= 1; mx += 1; if (zero && mn < 0) { mx -= mn; mn = 0; } }
+  const span = mx - mn, raw = span / 4, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(q => q * mag).find(q => q >= raw - 1e-12);
+  let lo = Math.floor(mn / step + 1e-9) * step, hi = Math.ceil(mx / step - 1e-9) * step;
+  if (hi - mx < span * 0.08) hi += step;
+  if (!(zero && lo >= 0) && mn - lo < span * 0.08) lo -= step;
+  const ticks = []; for (let t = lo; t <= hi + step / 1000; t += step) ticks.push(Math.round(t / step) * step);
   return { lo, hi, step, ticks };
 }
 function drawChart(el, o) {
-  const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 185;
+  const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 230;
   const all = [];
   for (const s of o.series) {
     for (const v of s.vals) if (v != null) all.push(v);
@@ -843,7 +840,7 @@ function nearestPt(pts, min, maxDist = 15) {
 }
 const hhmm = mi => `${Math.floor(mi / 60)}:${pad(Math.round(mi % 60))}`;
 function drawFine(el, o) {
-  const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 185, R = 4, T = 10, Bm = 22;
+  const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 230, R = 4, T = 10, Bm = 22;
   const all = [];
   for (const s2 of [o.a, o.b]) if (s2) for (const p of s2) all.push(p[1]);
   for (const f of o.fc || []) for (const p of f.pts) all.push(p[1]);
