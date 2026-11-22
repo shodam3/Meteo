@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 12;
+const APP_VERSION = 13;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -865,6 +865,10 @@ function openPicker(which) {
     wy = makeWheel(col(), years, a.getFullYear() - 2000, () => upd());
     get = () => clampDay(wy.val(), wm.val(), wd.val());
   }
+  $('pkToday').onclick = () => {
+    if (which === 'b') st.cmp = today(); else st.anchor = today();
+    closeSheet('picker'); st.sel = null; refresh();
+  };
   $('pkOk').onclick = () => {
     let d = get(); if (d > t) d = t;
     if (which === 'b') st.cmp = d; else st.anchor = d;
