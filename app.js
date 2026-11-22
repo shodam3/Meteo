@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 23;
+const APP_VERSION = 24;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -865,7 +865,9 @@ function drawFine(el, o) {
   if (o.b) for (const sg of segments(o.b)) s += `<path d="${monoPath(px(sg))}" fill="none" stroke="#C2410C" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round" stroke-linecap="round"/>`;
   if (o.a) for (const sg of segments(o.a)) {
     const d = monoPath(px(sg));
-    s += `<path d="${d}" fill="none" stroke="url(#gW)" stroke-opacity="0.3" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/>`
+    // podkres od čáry dolů k ose
+    const base = f1(y(sc.lo)), x0 = f1(x(sg[0][0])), x1 = f1(x(sg[sg.length - 1][0]));
+    s += `<path d="${d}L${x1} ${base}L${x0} ${base}Z" fill="url(#gW)" fill-opacity="0.25" stroke="none"/>`
       + `<path d="${d}" fill="none" stroke="url(#gL)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`;
   }
   if (o.sel != null) {
