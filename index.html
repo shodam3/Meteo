@@ -42,6 +42,8 @@ h1{margin:0;font-size:22px;font-weight:700}
 .seg button.on{background:#fff;color:var(--tx);font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.12)}
 .seg.s4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .seg.s3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.seg.s2m{grid-template-columns:repeat(2,minmax(0,1fr))}
+.seg button[hidden]{display:none}
 .seg.s2{grid-template-columns:repeat(2,44px)}
 .seg.small button{height:34px;font-size:13px}
 .nav{display:flex;align-items:center;justify-content:space-between;gap:6px}
@@ -182,8 +184,6 @@ legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bot
 <legend>Data v telefonu</legend>
 <div class="msg muted" id="quota"></div>
 <div class="row"><button class="btn" id="btnClear">Smazat data uložená v telefonu</button></div>
-<div class="row"><button class="btn" id="btnDiag">Ukázka dat z WU (vítr)</button></div>
-<pre id="diag" style="white-space:pre-wrap;font-size:11px;margin:0;max-height:50vh;overflow:auto" hidden></pre>
 </fieldset>
 <button class="btn dark" id="btnBack" style="height:46px">Zpět ke grafům</button>
 <p class="note">Klíče jsou uložené jen v tomto prohlížeči. Data z Weather Underground se ukládají v telefonu, a pokud je nastavený GitHub, také do vašeho soukromého repozitáře.</p>
@@ -198,6 +198,6 @@ legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bot
 </div>
 </div>
 
-<script src="app.js?v=14"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>

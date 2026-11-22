@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 14;
+const APP_VERSION = 15;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -43,8 +43,8 @@ const VARS = {
   dew: { n: 'Rosný bod', u: '°C', dec: 1, kind: 'hla', chart: 'line' },
   hum: { n: 'Vlhkost', u: '%', dec: 0, kind: 'hla', chart: 'line' },
   press: { n: 'Tlak', u: 'hPa', dec: 1, kind: 'hla', chart: 'line' },
-  wind: { n: 'Vítr', u: 'km/h', dec: 1, kind: 'hla', chart: 'bar', zero: true },
-  gust: { n: 'Nárazy', u: 'km/h', dec: 1, kind: 'hla', chart: 'bar', zero: true },
+  wind: { n: 'Vítr', u: 'km/h', dec: 1, kind: 'hla', chart: 'bar', zero: true, noMin: true },
+  gust: { n: 'Nárazy', u: 'km/h', dec: 1, kind: 'hla', chart: 'bar', zero: true, noMin: true },
   rain: { n: 'Srážky', u: 'mm', dec: 1, kind: 'sum', chart: 'bar', zero: true },
   solar: { n: 'Záření', u: 'W/m²', dec: 0, kind: 'max', chart: 'line', zero: true },
   uv: { n: 'UV', u: '', dec: 1, kind: 'max', chart: 'bar', zero: true }
@@ -64,6 +64,8 @@ const st = {
 };
 const saveView = () => LS.set('meteo.view', { scale: st.scale, v: st.v, mode: st.mode, charts: st.charts });
 const chartType = () => st.charts[st.v] || VARS[st.v].chart;
+// u větru a nárazů WU jako minimum posílá okamžité hodnoty (téměř vždy 0), volba Min se proto nenabízí
+const curMode = () => VARS[st.v].noMin && st.mode === 'min' ? 'avg' : st.mode;
 
 // ---------- úložiště v telefonu (IndexedDB) ----------
 const idb = {
@@ -634,7 +636,8 @@ function renderControls() {
   for (const b of $('types').children) { const on = b.dataset.t === chartType(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
   const V = VARS[st.v];
   $('modes').style.visibility = V.kind === 'sum' ? 'hidden' : '';
-  for (const b of $('modes').children) { const on = b.dataset.m === st.mode; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
+  for (const b of $('modes').children) { const on = b.dataset.m === curMode(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); b.hidden = b.dataset.m === 'min' && !!V.noMin; }
+  $('modes').className = 'seg small ' + (V.noMin ? 's2m' : 's3');
   const t = today();
   const navHtml = (which, anchor) => {
     const p = periodOf(st.scale, anchor), lb = periodLabel(p);
@@ -683,19 +686,19 @@ async function refresh() {
 
 function extraVals(a, b) {
   if (VARS[st.v].kind === 'sum') return null;
-  const out = [];
-  for (const X of [a, b]) if (X) for (const x of X.vals) out.push(x.hi, x.lo);
+  const out = [], noMin = VARS[st.v].noMin;
+  for (const X of [a, b]) if (X) for (const x of X.vals) out.push(x.hi, noMin ? x.avg : x.lo);
   return out;
 }
 function draw() {
   if (!model) return;
   const { A, B } = model, type = chartType(), V = VARS[st.v];
-  const mk = X => { const Bk = buildBuckets(st.scale, type, X.p); fillBuckets(Bk, X.h, X.d); return { Bk, vals: bucketVals(Bk, st.v, st.mode) }; };
+  const mk = X => { const Bk = buildBuckets(st.scale, type, X.p); fillBuckets(Bk, X.h, X.d); return { Bk, vals: bucketVals(Bk, st.v, curMode()) }; };
   const a = mk(A), b = B ? mk(B) : null;
   const n = Math.max(a.Bk.length, b ? b.Bk.length : 0);
   const padTo = arr => { const r = arr.slice(); while (r.length < n) r.push(null); return r; };
   const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
-  const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, x.lo])) : null }];
+  const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
   if (st.sel != null && st.sel >= n) st.sel = null;
   const geo = drawChart($('chart'), { type, n, series, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(A.p).t}` });
@@ -709,7 +712,7 @@ function drawGraphOnly() {
   const n = Math.max(a.Bk.length, b ? b.Bk.length : 0);
   const padTo = arr => { const r = arr.slice(); while (r.length < n) r.push(null); return r; };
   const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
-  const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, x.lo])) : null }];
+  const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
   current.geo = drawChart($('chart'), { type, n, series, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` });
   renderInfo();
@@ -723,7 +726,7 @@ function renderInfo() {
     const bk = X.Bk[i]; if (!bk) return '';
     const v = X.vals[i];
     let t = `<b>${esc(bucketName(bk, st.scale))}</b>: ${v.val == null ? 'bez dat' : fmtU(v.val, V)}`;
-    if (!st.cmp && V.kind === 'hla' && v.hi != null) t += ` <span class="muted">(max ${fmt(v.hi, V.dec)} · min ${fmt(v.lo, V.dec)} · prům. ${fmt(v.avg, V.dec)})</span>`;
+    if (!st.cmp && V.kind === 'hla' && v.hi != null) t += ` <span class="muted">(max ${fmt(v.hi, V.dec)}${V.noMin ? '' : ' · min ' + fmt(v.lo, V.dec)} · prům. ${fmt(v.avg, V.dec)})</span>`;
     return `<div class="il ${cls}">${t}</div>`;
   };
   const bk = c.a.Bk[i];
@@ -975,21 +978,6 @@ function bindUI() {
     renderCurrent();
     if (ok) setTimeout(() => { closeSheet('settings'); }, 1200);
     refresh();
-  };
-  $('btnDiag').onclick = async () => {
-    const out = $('diag'); out.hidden = false; out.textContent = 'Stahuji…';
-    const y = addDays(today(), -1), ds = compact(y);
-    const f = v => v == null ? '–' : String(v);
-    const row = o => { const m = o.metric || {}; return `${String(o.obsTimeLocal || '').slice(11, 16)}  vítr ${f(m.windspeedLow)} / ${f(m.windspeedAvg)} / ${f(m.windspeedHigh)}   nárazy ${f(m.windgustLow)} / ${f(m.windgustAvg)} / ${f(m.windgustHigh)}`; };
-    try {
-      const hr = await wuGet('history/hourly', { date: ds });
-      const al = await wuGet('history/all', { date: ds });
-      const pick = (arr, a, b) => arr.filter(o => { const h = Number(String(o.obsTimeLocal || '').slice(11, 13)); return h >= a && h < b; });
-      out.textContent = `Včera (${y.getDate()}. ${y.getMonth() + 1}.), hodnoty min / průměr / max v km/h\n\n`
-        + `HODINOVÁ DATA 10:00–16:00:\n${pick(hr, 10, 16).map(row).join('\n') || 'žádná'}\n\n`
-        + `PODROBNÁ DATA 12:00–13:00:\n${pick(al, 12, 13).map(row).join('\n') || 'žádná'}\n\n`
-        + `Ukázka jednoho hodinového záznamu:\n${JSON.stringify(pick(hr, 12, 13)[0] || hr[0] || {}, null, 1).slice(0, 1500)}`;
-    } catch (err) { out.textContent = 'Chyba: ' + err.message; }
   };
   $('btnClear').onclick = async () => {
     if (!confirm('Smazat data uložená v tomto telefonu? Data na Weather Underground a na GitHubu zůstanou.')) return;
