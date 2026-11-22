@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 34;
+const APP_VERSION = 35;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1373,6 +1373,7 @@ function bindUI() {
   };
   const begin = (x, y) => {
     press = { x, y, lx: x, t: Date.now(), scrub: false, moved: false };
+    if (zoomed()) return; // při přiblížené stránce se svislá čára nezobrazuje, prst jen posouvá obraz
     press.timer = setTimeout(() => { if (!press || press.moved) return; press.scrub = true; ch.classList.add('scrub'); try { navigator.vibrate && navigator.vibrate(8); } catch { } selectAt(press.lx); }, 280);
   };
   const move = (x, y, ev) => {
