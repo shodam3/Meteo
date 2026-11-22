@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 22;
+const APP_VERSION = 23;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -345,7 +345,7 @@ function dayDetail(d) {
 }
 const EXT = { temp: ['tempHigh', 'tempLow'], dew: ['dewptHigh', 'dewptLow'], hum: ['humidityHigh', 'humidityLow'], press: ['pressureMax', 'pressureMin'], wind: ['windspeedHigh', null], gust: ['windgustHigh', null], solar: ['solarRadiationHigh', null], uv: ['uvHigh', null] };
 async function rain5load(d) {
-  const key = 'day5b/' + d, e = await idb.get(key);
+  const key = 'day5c/' + d, e = await idb.get(key);
   if (e && (e.final || Date.now() - e.fetchedAt < STALE)) return e;
   setBusy(1);
   try {
@@ -381,8 +381,20 @@ async function rain5load(d) {
       }
       if (x.hi != null) ext[v] = x;
     }
+    // jemná řada pro čárový graf dne: minuty od půlnoci a hodnoty (průměr za interval, u nárazů, záření a UV maximum, u srážek úhrn od půlnoci)
+    const FINE = { temp: ['tempAvg', 'temp'], dew: ['dewptAvg', 'dewpt'], hum: ['humidityAvg', 'humidity'], wind: ['windspeedAvg', 'windSpeed'], gust: ['windgustHigh', 'windGust'], solar: ['solarRadiationHigh', 'solarRadiation'], uv: ['uvHigh', 'uv'], rain: ['precipTotal'] };
+    const fine = { t: [], v: Object.fromEntries([...Object.keys(FINE), 'press'].map(k => [k, []])) };
+    for (const o of obs) {
+      const t = String(o.obsTimeLocal || ''); if (!t.startsWith(d)) continue;
+      const mi = Number(t.slice(11, 13)) * 60 + Number(t.slice(14, 16)); if (!(mi >= 0 && mi < 1440)) continue;
+      const m = o.metric || {}, g = f => num(m[f] ?? o[f]);
+      fine.t.push(mi);
+      for (const [k, fs] of Object.entries(FINE)) { let v = null; for (const f of fs) { v = g(f); if (v != null) break; } fine.v[k].push(v); }
+      const pmx = g('pressureMax'), pmn = g('pressureMin');
+      fine.v.press.push(pmx != null && pmn != null ? (pmx + pmn) / 2 : (pmx ?? pmn ?? g('pressure')));
+    }
     const final = Date.now() > addDays(parseYmd(d), 1).getTime() + 3600e3;
-    const res = { final, fetchedAt: Date.now(), hours, ext };
+    const res = { final, fetchedAt: Date.now(), hours, ext, fine };
     await idb.set(key, res);
     return res;
   } catch (err) { note('Podrobná měření: ' + err.message); return e || null; }
@@ -446,7 +458,8 @@ async function omFetch(id) {
   const H = (await r.json()).hourly || {}, t = H.time || [];
   const T = H.temperature_2m || [], P = H.precipitation || [], W = H.wind_speed_10m || [], G = H.wind_gusts_10m || [], PR = H.pressure_msl || [];
   // hodnoty k okamžiku → průměr začátku a konce hodiny; srážky a nárazy jsou za předchozí hodinu → bere se konec hodiny
-  return t.map((x, i) => [x.slice(0, 10), Number(x.slice(11, 13)), avg2(T[i], T[i + 1]), P[i + 1] ?? null, avg2(W[i], W[i + 1]), G[i + 1] ?? null, avg2(PR[i], PR[i + 1])]);
+  return t.map((x, i) => [x.slice(0, 10), Number(x.slice(11, 13)), avg2(T[i], T[i + 1]), P[i + 1] ?? null, avg2(W[i], W[i + 1]), G[i + 1] ?? null, avg2(PR[i], PR[i + 1]),
+    T[i] ?? null, P[i] ?? null, W[i] ?? null, G[i] ?? null, PR[i] ?? null]);
 }
 async function yrFetch() {
   const u = `https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=${Number(cfg.lat).toFixed(4)}&lon=${Number(cfg.lon).toFixed(4)}`;
@@ -473,7 +486,8 @@ async function yrFetch() {
   for (let i = 0; i < N - 1; i++) {
     const d = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate(), i);
     const g = inst.g[i] == null ? inst.g[i + 1] : inst.g[i + 1] == null ? inst.g[i] : Math.max(inst.g[i], inst.g[i + 1]);
-    out.push([ymd(d), d.getHours(), avg2(inst.t[i], inst.t[i + 1]), rain[i] != null ? r2(rain[i]) : null, avg2(inst.w[i], inst.w[i + 1]), g, avg2(inst.p[i], inst.p[i + 1])]);
+    out.push([ymd(d), d.getHours(), avg2(inst.t[i], inst.t[i + 1]), rain[i] != null ? r2(rain[i]) : null, avg2(inst.w[i], inst.w[i + 1]), g, avg2(inst.p[i], inst.p[i + 1]),
+      inst.t[i], i > 0 && rain[i - 1] != null ? r2(rain[i - 1]) : null, inst.w[i], inst.g[i], inst.p[i]]);
   }
   return out;
 }
@@ -483,13 +497,13 @@ function fcGet(k) {
 }
 async function fcLoad(k) {
   const m = MODEL[k], ttl = m.yr ? 3 * 3600e3 : 3600e3, loc = cfg.lat + ',' + cfg.lon, day = ymd(today());
-  const c = fcMem.get(k) || LS.get('meteo.fc.' + k, null);
+  const c = fcMem.get(k) || LS.get('meteo.fc2.' + k, null);
   if (c && c.loc === loc && c.day === day && Date.now() - c.at < ttl) { fcMem.set(k, c); return c; }
   try {
     const rows = m.yr ? await yrFetch() : await omFetch(m.om);
     const has = rows.some(x => x[2] != null);
     const e = { at: Date.now(), loc, day, rows: has ? rows : [] };
-    fcMem.set(k, e); LS.set('meteo.fc.' + k, e); setFcStat(k, has ? 'ok' : 'nodata');
+    fcMem.set(k, e); LS.set('meteo.fc2.' + k, e); setFcStat(k, has ? 'ok' : 'nodata');
     return e;
   } catch (err) {
     setFcStat(k, 'err'); note(m.n + ': ' + err.message);
@@ -508,6 +522,24 @@ async function loadForecasts() {
   return out;
 }
 const FCI = { temp: 2, rain: 3, wind: 4, gust: 5, press: 6 };
+const FCI0 = { temp: 7, rain: 8, wind: 9, gust: 10, press: 11 };
+// předpovědi pro jemný graf dne: body v celých hodinách 0–24 h (u srážek průběžný úhrn od půlnoci)
+function fcFine(fc, dayStr, v) {
+  const out = [], next = ymd(addDays(parseYmd(dayStr), 1));
+  for (const k of fcModels) {
+    if (!fcOn.includes(k) || !fc[k] || !fc[k].rows.length) continue;
+    const mp = new Map(fc[k].rows.map(x => [x[0] + '|' + x[1], x]));
+    const pts = []; let cum = 0, any = false;
+    for (let h = 0; h <= 24; h++) {
+      const x = h < 24 ? mp.get(dayStr + '|' + h) : mp.get(next + '|0');
+      let val = x ? x[FCI0[v]] : null;
+      if (v === 'rain') { if (h === 0) val = 0; else if (val != null) { cum += val; val = r2(cum); } }
+      if (val != null) { pts.push([h * 60, val]); if (h > 0 || v !== 'rain') any = true; }
+    }
+    if (any) out.push({ k, n: MODEL[k].n, color: MODEL[k].c, pts });
+  }
+  return out;
+}
 function fcSeries(fc, Bk, v) {
   const out = [];
   for (const k of fcModels) {
@@ -707,15 +739,17 @@ function drawChart(el, o) {
         if (v == null) return;
         const top = Math.min(y(v), base - 1);
         const x = two ? (k === 0 ? xc(i) - w - 0.5 : xc(i) + 0.5) : xc(i) - w / 2;
-        s += `<rect x="${f1(x)}" y="${f1(top)}" width="${f1(w)}" height="${f1(base - top)}" rx="${Math.min(2, w / 3)}" fill="url(#g${k === 0 ? 'A' : 'B'})"/>`;
+        const ww = !two && o.partial && o.partial.i === i ? Math.max(1, w * o.partial.frac) : w;
+        s += `<rect x="${f1(x)}" y="${f1(top)}" width="${f1(ww)}" height="${f1(base - top)}" rx="${Math.min(2, w / 3)}" fill="url(#g${k === 0 ? 'A' : 'B'})"/>`;
       });
     });
     if (lab) {
       s += '<g font-size="9" font-weight="600" fill="#A21CAF" font-family="inherit">';
       o.series[0].vals.forEach((v, i) => {
         if (v == null || Number(v.toFixed(o.dec)) === 0) return; const top = f1(Math.min(y(v), base - 1) - 3);
-        s += lab === 'h' ? `<text x="${f1(xc(i))}" y="${top}" text-anchor="middle">${txt[i]}</text>`
-          : `<text transform="translate(${f1(xc(i) + 3)},${top}) rotate(-90)">${txt[i]}</text>`;
+        const lx = o.partial && o.partial.i === i ? xc(i) - slot * 0.39 + slot * 0.39 * o.partial.frac : xc(i);
+        s += lab === 'h' ? `<text x="${f1(lx)}" y="${top}" text-anchor="middle">${txt[i]}</text>`
+          : `<text transform="translate(${f1(lx + 3)},${top}) rotate(-90)">${txt[i]}</text>`;
       });
       s += '</g>';
     }
@@ -766,6 +800,86 @@ function drawChart(el, o) {
   el.innerHTML = s;
   return { L, slot, n };
 }
+// vyhlazení čáry monotónní kubickou křivkou (nepřekmitává přes naměřené hodnoty)
+function monoPath(P) {
+  const f1 = x => Math.round(x * 10) / 10, n = P.length;
+  if (!n) return '';
+  let d = `M${f1(P[0][0])} ${f1(P[0][1])}`;
+  if (n === 1) return d + `L${f1(P[0][0] + 0.1)} ${f1(P[0][1])}`;
+  const dx = [], m = [], t = new Array(n);
+  for (let i = 0; i < n - 1; i++) { dx[i] = P[i + 1][0] - P[i][0] || 1e-6; m[i] = (P[i + 1][1] - P[i][1]) / dx[i]; }
+  t[0] = m[0]; t[n - 1] = m[n - 2];
+  for (let i = 1; i < n - 1; i++) t[i] = m[i - 1] * m[i] <= 0 ? 0 : (m[i - 1] + m[i]) / 2;
+  for (let i = 0; i < n - 1; i++) {
+    if (m[i] === 0) { t[i] = 0; t[i + 1] = 0; continue; }
+    const a = t[i] / m[i], b = t[i + 1] / m[i], h = a * a + b * b;
+    if (h > 9) { const k = 3 / Math.sqrt(h); t[i] = k * a * m[i]; t[i + 1] = k * b * m[i]; }
+  }
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i] / 3;
+    d += `C${f1(P[i][0] + h)} ${f1(P[i][1] + t[i] * h)} ${f1(P[i + 1][0] - h)} ${f1(P[i + 1][1] - t[i + 1] * h)} ${f1(P[i + 1][0])} ${f1(P[i + 1][1])}`;
+  }
+  return d;
+}
+// rozdělení na souvislé úseky (mezera v měření delší než 20 minut čáru přeruší)
+function segments(pts, gap = 20) {
+  const out = []; let cur = [];
+  for (const p of pts) { if (cur.length && p[0] - cur[cur.length - 1][0] > gap) { out.push(cur); cur = []; } cur.push(p); }
+  if (cur.length) out.push(cur);
+  return out;
+}
+function nearestPt(pts, min, maxDist = 15) {
+  if (!pts || !pts.length) return null;
+  let best = null, bd = Infinity;
+  for (const p of pts) { const d = Math.abs(p[0] - min); if (d < bd) { bd = d; best = p; } }
+  return bd <= maxDist ? best : null;
+}
+const hhmm = mi => `${Math.floor(mi / 60)}:${pad(Math.round(mi % 60))}`;
+function drawFine(el, o) {
+  const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 230, L = 36, R = 6, T = 12, Bm = 22;
+  const all = [];
+  for (const s2 of [o.a, o.b]) if (s2) for (const p of s2) all.push(p[1]);
+  for (const f of o.fc || []) for (const p of f.pts) all.push(p[1]);
+  if (!all.length) { el.innerHTML = `<div class="empty">${o.emptyMsg || 'Pro tento den nejsou žádná data.'}</div>`; return null; }
+  let mn = all[0], mx = all[0]; for (const v of all) { if (v < mn) mn = v; if (v > mx) mx = v; }
+  const sc = nice(mn, mx, o.zero), plotH = H - T - Bm, slot = (W - L - R) / 24;
+  const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
+  const x = mi => L + slot * mi / 60, y = v => T + (sc.hi - v) / (sc.hi - sc.lo) * plotH, f1 = v => Math.round(v * 10) / 10;
+  const px = pts => pts.map(p => [x(p[0]), y(p[1])]);
+  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.aria || 'Graf')}">`;
+  s += `<defs><linearGradient id="gA" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34E89E"/><stop offset="0.55" stop-color="#3EE6F2"/><stop offset="1" stop-color="#38BDF8"/></linearGradient>`
+    + `<linearGradient id="gL" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#14C07C"/><stop offset="0.55" stop-color="#10BCD3"/><stop offset="1" stop-color="#1D8FE0"/></linearGradient>`
+    + `<linearGradient id="gW" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#34E89E"/><stop offset="0.55" stop-color="#3EE6F2"/><stop offset="1" stop-color="#38BDF8"/></linearGradient></defs>`;
+  s += '<g font-size="10" fill="#4B5563" font-family="inherit">';
+  for (const t of sc.ticks) {
+    const yy = f1(y(t));
+    s += `<line x1="${L}" y1="${yy}" x2="${W - R}" y2="${yy}" stroke="${t === 0 && sc.lo < 0 ? '#9CA3AF' : '#E5E7EB'}" stroke-width="1"/><text x="${L - 4}" y="${yy + 3.5}" text-anchor="end">${fmt(t, tdec)}</text>`;
+  }
+  for (let h = 0; h < 24; h++) {
+    if (h % 6 === 0 && h > 0) s += `<line x1="${f1(x(h * 60))}" y1="${T}" x2="${f1(x(h * 60))}" y2="${T + plotH}" stroke="#E5E7EB" stroke-dasharray="2 3"/>`;
+    if (h % 3 === 0) s += `<text x="${f1(x(h * 60))}" y="${H - 6}" text-anchor="middle" font-size="11">${h}h</text>`;
+  }
+  s += '</g>';
+  if (o.now != null) s += `<line x1="${f1(x(o.now))}" y1="${T}" x2="${f1(x(o.now))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.45"/>`;
+  for (const f of o.fc || []) s += `<path d="${monoPath(px(f.pts))}" fill="none" stroke="${f.color}" stroke-opacity="0.9" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+  if (o.b) for (const sg of segments(o.b)) s += `<path d="${monoPath(px(sg))}" fill="none" stroke="#C2410C" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round" stroke-linecap="round"/>`;
+  if (o.a) for (const sg of segments(o.a)) {
+    const d = monoPath(px(sg));
+    s += `<path d="${d}" fill="none" stroke="url(#gW)" stroke-opacity="0.3" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/>`
+      + `<path d="${d}" fill="none" stroke="url(#gL)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }
+  if (o.sel != null) {
+    s += `<line x1="${f1(x(o.sel))}" y1="${T}" x2="${f1(x(o.sel))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-opacity="0.5"/>`;
+    const pa = nearestPt(o.a, o.sel), pb = nearestPt(o.b, o.sel);
+    if (pb) s += `<circle cx="${f1(x(pb[0]))}" cy="${f1(y(pb[1]))}" r="3.5" fill="#fff" stroke="#C2410C" stroke-width="2"/>`;
+    if (pa) s += `<circle cx="${f1(x(pa[0]))}" cy="${f1(y(pa[1]))}" r="4" fill="#fff" stroke="#10A9C4" stroke-width="2"/>`;
+    for (const f of o.fc || []) { const q = nearestPt(f.pts, o.sel, 30); if (q) s += `<circle cx="${f1(x(q[0]))}" cy="${f1(y(q[1]))}" r="3" fill="#fff" stroke="${f.color}" stroke-width="1.5"/>`; }
+  }
+  s += '</svg>';
+  el.innerHTML = s;
+  return { L, slot, n: 24, fine: true };
+}
+
 function xAxis(scale, type, B) {
   const D = i => B[i] && B[i].d ? parseYmd(B[i].d) : null;
   // u hodin je popisek na hranici hodiny (14h = 14:00), bod hodinové hodnoty leží uprostřed hodiny
@@ -792,7 +906,7 @@ function renderControls() {
   for (const b of $('scales').children) { const on = b.dataset.s === st.scale; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
   for (const b of $('types').children) { const on = b.dataset.t === chartType(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
   const V = VARS[st.v];
-  $('modes').style.visibility = V.kind === 'sum' ? 'hidden' : '';
+  $('modes').style.visibility = V.kind === 'sum' || (st.scale === 'day' && chartType() === 'line') ? 'hidden' : '';
   for (const b of $('modes').children) { const on = b.dataset.m === curMode(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); b.hidden = b.dataset.m === 'min' && !!V.noMin; }
   $('modes').className = 'seg small ' + (V.noMin ? 's2m' : 's3');
   const t = today();
@@ -822,7 +936,7 @@ async function refresh() {
     const wantDet = st.scale === 'day' && p.s <= today();
     const [h, d, det] = await Promise.all([needH ? getRange('hourly', p.s, p.e).then(x => st.v === 'rain' ? applyRain5(x) : x) : [], getRange('daily', p.s, p.e),
       wantDet ? dayDetail(ymd(p.s)).catch(() => null) : null]);
-    return { p, h, d, ext: det && det.ext ? det.ext : null };
+    return { p, h, d, ext: det && det.ext ? det.ext : null, fine: det && det.fine && det.fine.t.length ? det.fine : null };
   };
   setBusy(1);
   // když načítání trvá, nenechávat v grafu data předchozího období
@@ -863,6 +977,36 @@ function chartOpts(a, b) {
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
   const o = { type, n, series, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
   const future = st.scale === 'day' && !b && st.anchor > today();
+  // čárový graf dne z podrobných měření
+  if (st.scale === 'day' && type === 'line' && (model.A.fine || future || (b && model.B && model.B.fine))) {
+    const toPts = (X, isToday) => {
+      if (!X || !X.fine) return null;
+      const vv = X.fine.v[st.v] || [], pts = [];
+      X.fine.t.forEach((t, i) => { if (vv[i] != null) pts.push([t, vv[i]]); });
+      if (isToday && cur && String(cur.obsTimeLocal || '').startsWith(ymd(today()))) {
+        const m = cur.metric || {}, cv = num({ temp: m.temp, dew: m.dewpt, hum: cur.humidity, press: m.pressure, wind: m.windSpeed, gust: m.windGust, solar: cur.solarRadiation, uv: cur.uv, rain: m.precipTotal }[st.v]);
+        const ct = String(cur.obsTimeLocal).slice(11, 16).split(':').map(Number), mi = ct[0] * 60 + ct[1];
+        if (cv != null && (!pts.length || mi > pts[pts.length - 1][0] + 2)) pts.push([mi, cv]);
+      }
+      return pts.length ? pts : null;
+    };
+    const isT = dayDiff(today(), st.anchor) === 0;
+    const fo = { fine: true, a: toPts(model.A, isT), b: b ? toPts(model.B, false) : null, zero: !!V.zero, dec: V.dec, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+    if (fcApplicable()) fo.fc = fcFine(model.fc || {}, ymd(st.anchor), st.v);
+    if (isT && !b) { const nw = new Date(); fo.now = nw.getHours() * 60 + nw.getMinutes(); }
+    if (future) fo.emptyMsg = !FC_VARS.includes(st.v) ? 'Předpověď pro tuto veličinu není k dispozici.'
+      : !fcModels.length ? 'Nejsou vybrané žádné modely předpovědi (nastavení).'
+      : !fcModels.some(k => fcOn.includes(k)) ? 'Zapněte některý model pod grafem.'
+      : cfg.lat == null ? 'Čekám na polohu stanice…' : 'Načítám předpověď…';
+    return fo;
+  }
+  // sloupec probíhající hodiny je úzký podle uplynulé části hodiny
+  if (st.scale === 'day' && type === 'bar' && !b && dayDiff(today(), st.anchor) === 0) {
+    let mi = null;
+    if (cur && String(cur.obsTimeLocal || '').startsWith(ymd(today()))) { const ct = String(cur.obsTimeLocal).slice(11, 16).split(':').map(Number); mi = ct[0] * 60 + ct[1]; }
+    if (mi == null) { const nw = new Date(); mi = nw.getHours() * 60 + nw.getMinutes(); }
+    o.partial = { i: Math.floor(mi / 60), frac: Math.max(0.08, (mi % 60) / 60) };
+  }
   if (fcApplicable() && type === 'line') {
     o.fc = fcSeries(model.fc || {}, a.Bk, st.v);
     if (dayDiff(today(), st.anchor) === 0) { const nw = new Date(); o.now = nw.getHours() + nw.getMinutes() / 60; }
@@ -884,16 +1028,16 @@ function draw() {
   const { A, B } = model;
   const mk = X => { const Bk = buildBuckets(st.scale, chartType(), X.p); fillBuckets(Bk, X.h, X.d); return { Bk, vals: bucketVals(Bk, st.v, curMode()) }; };
   const a = mk(A), b = B ? mk(B) : null;
-  if (st.sel != null && st.sel >= Math.max(a.Bk.length, b ? b.Bk.length : 0)) st.sel = null;
+  if (st.sel != null && !(st.scale === 'day' && chartType() === 'line') && st.sel >= Math.max(a.Bk.length, b ? b.Bk.length : 0)) st.sel = null;
   const o = chartOpts(a, b);
-  current = { a, b, fc: o.fc || null, geo: drawChart($('chart'), o) };
+  current = { a, b, fc: o.fc || null, fineO: o.fine ? o : null, geo: o.fine ? drawFine($('chart'), o) : drawChart($('chart'), o) };
   renderFcBar(); renderInfo(); renderSummary();
 }
 // při posouvání prstem se překresluje jen graf a řádek s hodnotami
 function drawGraphOnly() {
   if (!current || !model) return;
   const o = chartOpts(current.a, current.b);
-  current.fc = o.fc || null; current.geo = drawChart($('chart'), o);
+  current.fc = o.fc || null; current.fineO = o.fine ? o : null; current.geo = o.fine ? drawFine($('chart'), o) : drawChart($('chart'), o);
   renderInfo();
 }
 function renderFcBar() {
@@ -919,6 +1063,16 @@ function fcTableHtml(fc, Bk, v, title) {
 function renderInfo() {
   const el = $('info'), c = current, V = VARS[st.v];
   if (!c || !c.geo || st.sel == null) { el.innerHTML = '<span class="hint">Podržte prst na grafu a posouváním zobrazíte hodnoty · rychlým přejetím do strany změníte období</span>'; return; }
+  if (c.geo.fine) {
+    const fo = c.fineO, pa = nearestPt(fo.a, st.sel), pb = nearestPt(fo.b, st.sel);
+    const val = p => p ? fmtU(p[1], V) : 'bez dat';
+    let t = `<div class="il a"><b>${hhmm(pa ? pa[0] : st.sel)}</b> · ${val(pa)}${V.kind === 'sum' ? ' od půlnoci' : ''}</div>`;
+    if (fo.b) t += `<div class="il b"><b>${esc(periodLabel(model.B.p).t)}</b> · ${val(pb)}</div>`;
+    const fcs = (fo.fc || []).map(f => { const q = nearestPt(f.pts, st.sel, 30); return q ? { f, q } : null; }).filter(Boolean);
+    if (fcs.length) t += `<div class="muted" style="font-size:12px;margin-top:2px">Předpověď ${hhmm(fcs[0].q[0])}: ${fcs.map(({ f, q }) => `<span style="color:${f.color};font-weight:600">${esc(f.n)}</span> ${fmt(q[1], V.dec)}`).join(' · ')}</div>`;
+    el.innerHTML = `<div>${t}</div>`;
+    return;
+  }
   const i = st.sel;
   const line = (X, cls) => {
     const bk = X.Bk[i]; if (!bk) return '';
@@ -1157,6 +1311,13 @@ function bindUI() {
   const selectAt = x => {
     if (!current || !current.geo) return;
     const r = ch.getBoundingClientRect(), g = current.geo;
+    if (g.fine) {
+      let mi = Math.max(0, Math.min(1439, (x - r.left - g.L) / g.slot * 60));
+      const fo = current.fineO, p = nearestPt(fo && fo.a, mi) || nearestPt(fo && fo.b, mi);
+      mi = p ? p[0] : Math.round(mi / 5) * 5;
+      if (mi !== st.sel) { st.sel = mi; drawGraphOnly(); }
+      return;
+    }
     const i = Math.max(0, Math.min(g.n - 1, Math.floor((x - r.left - g.L) / g.slot)));
     if (i !== st.sel) { st.sel = i; drawGraphOnly(); }
   };
