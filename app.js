@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 26;
+const APP_VERSION = 28;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -679,14 +679,20 @@ function cutRecs(X, cut) {
 }
 
 // ---------- graf ----------
+// rozsah osy: data plus rezerva 8 % nahoře i dole (u veličin od nuly jen nahoře); popisky jen v „hezkých“ hodnotách uvnitř rozsahu
 function nice(mn, mx, zero) {
   if (zero) mn = Math.min(0, mn);
-  if (mx - mn < 1e-9) { mn -= 1; mx += 1; if (zero && mn < 0) { mx -= mn; mn = 0; } }
-  const raw = (mx - mn) / 4, mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map(s => s * mag).find(s => s >= raw - 1e-12);
-  const lo = Math.floor(mn / step + 1e-9) * step, hi = Math.ceil(mx / step - 1e-9) * step;
-  const ticks = []; for (let t = lo; t <= hi + step / 1000; t += step) ticks.push(Math.round(t / step) * step);
-  return { lo, hi: hi > lo ? hi : lo + step, step, ticks };
+  let span = mx - mn;
+  if (span < 1e-9) span = Math.max(Math.abs(mx) * 0.05, 1);
+  const padv = span * 0.08;
+  const lo = zero && mn >= 0 ? 0 : mn - padv, hi = mx + padv;
+  // největší „hezký“ krok, při kterém jsou v rozsahu aspoň 4 popisky
+  const mk = st2 => { const r = []; for (let t = Math.ceil(lo / st2 - 1e-9) * st2; t <= hi + 1e-9; t += st2) r.push(Math.round(t / st2) * st2); return r; };
+  const mag = 10 ** Math.floor(Math.log10(hi - lo));
+  const cands = [10, 5, 2, 1, 0.5, 0.2, 0.1].map(q => q * mag);
+  let step = cands[cands.length - 1], ticks = mk(step);
+  for (const c of cands) { const t = mk(c); if (t.length >= 4) { step = c; ticks = t; break; } }
+  return { lo, hi, step, ticks };
 }
 function drawChart(el, o) {
   const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 185;
