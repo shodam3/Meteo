@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 41;
+const APP_VERSION = 42;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -347,7 +347,7 @@ function dayDetail(d) {
 }
 const EXT = { temp: ['tempHigh', 'tempLow'], dew: ['dewptHigh', 'dewptLow'], hum: ['humidityHigh', 'humidityLow'], press: ['pressureMax', 'pressureMin'], wind: ['windspeedHigh', null], gust: ['windgustHigh', null], solar: ['solarRadiationHigh', null], uv: ['uvHigh', null] };
 async function rain5load(d) {
-  const key = 'day5c/' + d, e = await idb.get(key);
+  const key = 'day5d/' + d, e = await idb.get(key);
   if (e && (e.final || Date.now() - e.fetchedAt < STALE)) return e;
   setBusy(1);
   try {
@@ -384,7 +384,7 @@ async function rain5load(d) {
       if (x.hi != null) ext[v] = x;
     }
     // jemná řada pro čárový graf dne: minuty od půlnoci a hodnoty (průměr za interval, u nárazů, záření a UV maximum, u srážek úhrn od půlnoci)
-    const FINE = { temp: ['tempAvg', 'temp'], dew: ['dewptAvg', 'dewpt'], hum: ['humidityAvg', 'humidity'], wind: ['windspeedAvg', 'windSpeed'], gust: ['windgustHigh', 'windGust'], solar: ['solarRadiationHigh', 'solarRadiation'], uv: ['uvHigh', 'uv'], rain: ['precipTotal'] };
+    const FINE = { temp: ['tempAvg', 'temp'], dew: ['dewptAvg', 'dewpt'], hum: ['humidityAvg', 'humidity'], wind: ['windspeedAvg', 'windSpeed'], gust: ['windgustHigh', 'windGust'], solar: ['solarRadiationHigh', 'solarRadiation'], uv: ['uvHigh', 'uv'], rain: ['precipTotal'], dir: ['winddirAvg', 'winddir'] };
     const fine = { t: [], v: Object.fromEntries([...Object.keys(FINE), 'press'].map(k => [k, []])) };
     for (const o of obs) {
       const t = String(o.obsTimeLocal || ''); if (!t.startsWith(d)) continue;
@@ -455,14 +455,14 @@ const avg2 = (a, b) => a == null ? (b ?? null) : b == null ? a : (a + b) / 2;
 const maxDay = () => st.scale === 'day' ? addDays(today(), 2) : today();
 
 async function omFetch(id) {
-  const q = new URLSearchParams({ latitude: cfg.lat, longitude: cfg.lon, hourly: 'temperature_2m,precipitation,wind_speed_10m,wind_gusts_10m,pressure_msl', models: id, timezone: 'Europe/Prague', forecast_days: '3', wind_speed_unit: 'kmh' });
+  const q = new URLSearchParams({ latitude: cfg.lat, longitude: cfg.lon, hourly: 'temperature_2m,precipitation,wind_speed_10m,wind_gusts_10m,pressure_msl,wind_direction_10m', models: id, timezone: 'Europe/Prague', forecast_days: '3', wind_speed_unit: 'kmh' });
   let r; try { r = await fetch('https://api.open-meteo.com/v1/forecast?' + q, { cache: 'no-store' }); } catch { throw new Error('nepodařilo se spojit s Open-Meteo'); }
   if (!r.ok) { let m = ''; try { m = (await r.json()).reason || ''; } catch { } throw new Error('Open-Meteo ' + r.status + (m ? ': ' + m : '')); }
   const H = (await r.json()).hourly || {}, t = H.time || [];
-  const T = H.temperature_2m || [], P = H.precipitation || [], W = H.wind_speed_10m || [], G = H.wind_gusts_10m || [], PR = H.pressure_msl || [];
+  const T = H.temperature_2m || [], P = H.precipitation || [], W = H.wind_speed_10m || [], G = H.wind_gusts_10m || [], PR = H.pressure_msl || [], WD = H.wind_direction_10m || [];
   // hodnoty k okamžiku → průměr začátku a konce hodiny; srážky a nárazy jsou za předchozí hodinu → bere se konec hodiny
   return t.map((x, i) => [x.slice(0, 10), Number(x.slice(11, 13)), avg2(T[i], T[i + 1]), P[i + 1] ?? null, avg2(W[i], W[i + 1]), G[i + 1] ?? null, avg2(PR[i], PR[i + 1]),
-    T[i] ?? null, P[i] ?? null, W[i] ?? null, G[i] ?? null, PR[i] ?? null]);
+    T[i] ?? null, P[i] ?? null, W[i] ?? null, G[i] ?? null, PR[i] ?? null, WD[i] ?? null]);
 }
 async function yrFetch() {
   const u = `https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=${Number(cfg.lat).toFixed(4)}&lon=${Number(cfg.lon).toFixed(4)}`;
@@ -502,13 +502,13 @@ function fcGet(k) {
 }
 async function fcLoad(k) {
   const m = MODEL[k], ttl = m.yr ? 3 * 3600e3 : 3600e3, loc = cfg.lat + ',' + cfg.lon, day = ymd(today());
-  const c = fcMem.get(k) || LS.get('meteo.fc3.' + k, null);
+  const c = fcMem.get(k) || LS.get('meteo.fc4.' + k, null);
   if (c && c.loc === loc && c.day === day && Date.now() - c.at < ttl) { fcMem.set(k, c); return c; }
   try {
     const rows = m.yr ? await yrFetch() : await omFetch(m.om);
     const has = rows.some(x => x[2] != null);
     const e = { at: Date.now(), loc, day, rows: has ? rows : [] };
-    fcMem.set(k, e); LS.set('meteo.fc3.' + k, e); setFcStat(k, has ? 'ok' : 'nodata');
+    fcMem.set(k, e); LS.set('meteo.fc4.' + k, e); setFcStat(k, has ? 'ok' : 'nodata');
     return e;
   } catch (err) {
     setFcStat(k, 'err'); note(m.n + ': ' + err.message);
@@ -525,6 +525,37 @@ function iconRow() {
   const d = ymd(st.anchor), mp = new Map(model.icons.rows.filter(x => x[0] === d).map(x => [x[1], x[12]]));
   const row = Array.from({ length: 24 }, (_, h) => mp.get(h) || null);
   return row.some(Boolean) ? row : null;
+}
+// šipky směru větru nad grafem dne (vítr a nárazy): naměřený směr, pro hodiny bez měření předpověď ALADIN
+function windRow() {
+  if (st.scale !== 'day' || st.cmp || !model) return null;
+  const d = ymd(st.anchor), row = new Array(24).fill(null);
+  const F = model.A && model.A.fine;
+  if (F && F.v.dir) {
+    const acc = Array.from({ length: 24 }, () => ({ x: 0, y: 0, sp: 0, n: 0 }));
+    F.t.forEach((t, i) => {
+      const dir = F.v.dir[i], sp = F.v.wind ? F.v.wind[i] : null; if (dir == null) return;
+      const a = acc[Math.floor(t / 60)], w = sp != null ? Math.max(sp, 0.1) : 1;
+      a.x += Math.sin(dir * Math.PI / 180) * w; a.y += Math.cos(dir * Math.PI / 180) * w; a.sp += sp || 0; a.n++;
+    });
+    acc.forEach((a, h) => { if (a.n) row[h] = { deg: (Math.atan2(a.x, a.y) * 180 / Math.PI + 360) % 360, calm: a.sp / a.n < 1 }; });
+  } else if (model.A) for (const r of model.A.h || []) if (r.d === d && r.dir != null) row[r.h] = { deg: r.dir, calm: r.wind && r.wind[2] != null && r.wind[2] < 1 };
+  const dd = dayDiff(today(), st.anchor), nowH = new Date().getHours();
+  if (model.windFc && model.windFc.rows && dd >= 0) {
+    const mp = new Map(model.windFc.rows.filter(x => x[0] === d).map(x => [x[1], x]));
+    for (let h = 0; h < 24; h++) {
+      if (row[h] || (dd === 0 && h < nowH)) continue;
+      const x = mp.get(h); if (x && x[12] != null) row[h] = { deg: x[12], calm: x[9] != null && x[9] < 1 };
+    }
+  }
+  return row.some(Boolean) ? row : null;
+}
+// šipka míří tam, kam vítr fouká (směr větru udává, odkud fouká)
+function arrowSvg(a, cx, cy) {
+  const f1 = v => Math.round(v * 10) / 10;
+  if (!a) return '';
+  if (a.calm) return `<line x1="${f1(cx - 3.5)}" y1="${f1(cy)}" x2="${f1(cx + 3.5)}" y2="${f1(cy)}" stroke="#1F2937" stroke-width="1.5" stroke-linecap="round"/>`;
+  return `<g transform="translate(${f1(cx)},${f1(cy)}) rotate(${Math.round(a.deg + 180)})"><line x1="0" y1="6" x2="0" y2="-2" stroke="#1F2937" stroke-width="1.4" stroke-linecap="round"/><path d="M0 -7 L3.2 -1.2 L-3.2 -1.2 Z" fill="#1F2937"/></g>`;
 }
 const iconSvg = (code, x, y, sz) => code && /^[a-z_]+$/.test(code) ? `<image href="ikony/${code}.svg" x="${Math.round(x * 10) / 10}" y="${y}" width="${sz}" height="${sz}"/>` : '';
 function fcApplicable() {
@@ -728,7 +759,7 @@ function drawChart(el, o) {
   const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
   // levý okraj jen tak široký, aby se vešly popisky osy
   const L = Math.max(20, Math.max(...sc.ticks.map(t => fmt(t, tdec).length)) * 5.6 + 6), R = 4, Bm = 22, n = o.n, slot = (W - L - R) / n;
-  let lab = null, T = 12, txt = null; const IR = o.icons ? 18 : 0;
+  let lab = null, T = 12, txt = null; const IR = o.icons || o.arrows ? 18 : 0;
   if (o.type === 'bar' && o.series.length === 1) {
     txt = o.series[0].vals.map(v => v == null ? '' : fmt(v, o.dec));
     const tw = Math.max(...txt.map(t => t.length)) * 5.6;
@@ -756,6 +787,7 @@ function drawChart(el, o) {
   }
   s += '</g>';
   if (o.icons && n === 24) o.icons.forEach((c, h) => { s += iconSvg(c, L + slot * (h + 0.5) - 7.5, T - IR + 1, 15); });
+  if (o.arrows && n === 24) o.arrows.forEach((a, h) => { s += arrowSvg(a, L + slot * (h + 0.5), T - IR + 8.5); });
   const base = y(sc.lo);
   if (o.type === 'bar') {
     const two = o.series.length > 1, w = Math.max(1, slot * (two ? 0.4 : 0.78));
@@ -868,7 +900,7 @@ function drawFine(el, o) {
   for (const f of o.fc || []) for (const p of f.pts) all.push(p[1]);
   if (!all.length) { el.innerHTML = `<div class="empty">${o.emptyMsg || 'Pro tento den nejsou žádná data.'}</div>`; return null; }
   let mn = all[0], mx = all[0]; for (const v of all) { if (v < mn) mn = v; if (v > mx) mx = v; }
-  const IR = o.icons ? 18 : 0; T += IR;
+  const IR = o.icons || o.arrows ? 18 : 0; T += IR;
   const sc = nice(mn, mx, o.zero, o.cap), plotH = H - T - Bm;
   const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
   const L = Math.max(20, Math.max(...sc.ticks.map(t => fmt(t, tdec).length)) * 5.6 + 6), slot = (W - L - R) / 24;
@@ -889,6 +921,7 @@ function drawFine(el, o) {
   }
   s += '</g>';
   if (o.icons) o.icons.forEach((c, h) => { s += iconSvg(c, L + slot * (h + 0.5) - 7.5, T - IR + 1, 15); });
+  if (o.arrows) o.arrows.forEach((a, h) => { s += arrowSvg(a, L + slot * (h + 0.5), T - IR + 8.5); });
   if (o.now != null) s += `<line x1="${f1(x(o.now))}" y1="${T}" x2="${f1(x(o.now))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.45"/>`;
   for (const f of o.fc || []) s += `<path d="${monoPath(px(f.pts))}" fill="none" stroke="${f.color}" stroke-opacity="0.9" stroke-width="1.5" stroke-dasharray="4 3"/>`;
   if (o.b) for (const sg of segments(o.b)) s += `<path d="${monoPath(px(sg))}" fill="none" stroke="#C2410C" stroke-opacity="0.85" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
@@ -981,16 +1014,17 @@ async function refresh() {
   try {
     const fcP = loadForecasts().catch(() => ({}));
     const icP = iconsWanted() ? fcGet('yr').catch(() => null) : Promise.resolve(null);
+    const wdP = iconsWanted() && (st.v === 'wind' || st.v === 'gust') ? fcGet('aladin').catch(() => null) : Promise.resolve(null);
     const [A, B] = await Promise.all([load(pA), pB ? load(pB) : null]);
     clearTimeout(ph);
     if (my !== seq) return;
     model = { A, B, fc: {} }; showErr(''); draw();
     const fc = await fcP;
     if (my !== seq || !model) return;
-    const ic = await icP;
+    const ic = await icP, wd = await wdP;
     if (my !== seq || !model) return;
-    model.fc = fc; model.icons = ic;
-    if (Object.keys(fc).length || ic) draw();
+    model.fc = fc; model.icons = ic; model.windFc = wd;
+    if (Object.keys(fc).length || ic || wd) draw();
   } catch (err) {
     if (my !== seq) return;
     model = null; current = null; showErr(err.message);
@@ -1046,7 +1080,8 @@ function chartOpts(a, b) {
   const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
   const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
-  const o = { type, n, series, icons: st.scale === 'day' && !b ? iconRow() : null, thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+  const wv = st.v === 'wind' || st.v === 'gust';
+  const o = { type, n, series, icons: st.scale === 'day' && !b && !wv ? iconRow() : null, arrows: st.scale === 'day' && !b && wv ? windRow() : null, thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
   const future = st.scale === 'day' && !b && st.anchor > today();
   // čárový graf dne z podrobných měření
   if (st.scale === 'day' && type === 'line' && (model.A.fine || future || (b && model.B && model.B.fine))) {
@@ -1062,7 +1097,8 @@ function chartOpts(a, b) {
       return pts.length ? pts : null;
     };
     const isT = dayDiff(today(), st.anchor) === 0;
-    const fo = { fine: true, icons: iconRow(), thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, a: toPts(model.A, isT), b: b ? toPts(model.B, false) : null, zero: !!V.zero, dec: V.dec, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+    const isWind = st.v === 'wind' || st.v === 'gust';
+    const fo = { fine: true, icons: isWind ? null : iconRow(), arrows: isWind ? windRow() : null, thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, a: toPts(model.A, isT), b: b ? toPts(model.B, false) : null, zero: !!V.zero, dec: V.dec, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
     if (fcApplicable()) fo.fc = fcFine(model.fc || {}, ymd(st.anchor), st.v);
     if (isT && !b) { const nw = new Date(); fo.now = nw.getHours() * 60 + nw.getMinutes(); }
     if (future) fo.emptyMsg = !FC_VARS.includes(st.v) ? 'Předpověď pro tuto veličinu není k dispozici.'
@@ -1354,7 +1390,7 @@ function bindUI() {
   $('vars').addEventListener('click', e => {
     const b = e.target.closest('[data-v]'); if (!b) return;
     st.v = b.dataset.v; st.sel = null; saveView();
-    if (st.v === 'rain' && (st.scale === 'day' || st.scale === 'week')) refresh(); else { renderControls(); draw(); }
+    if ((st.v === 'rain' && (st.scale === 'day' || st.scale === 'week')) || ((st.v === 'wind' || st.v === 'gust') && iconsWanted() && !(model && model.windFc))) refresh(); else { renderControls(); draw(); }
   });
   $('scales').addEventListener('click', e => { const b = e.target.closest('[data-s]'); if (!b || b.dataset.s === st.scale) return; st.scale = b.dataset.s; st.sel = null; saveView(); refresh(); });
   $('types').addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; st.charts[st.v] = b.dataset.t; st.sel = null; saveView(); renderControls(); draw(); });
