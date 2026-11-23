@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 46;
+const APP_VERSION = 47;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -672,6 +672,14 @@ function buildBuckets(scale, type, p) {
   if (scale === 'day') for (let h = 0; h < 24; h++) B.push({ k: 'h', d: ymd(s), h });
   else if (scale === 'week' && type === 'line') for (let i = 0; i < 168; i++) B.push({ k: 'h', d: ymd(addDays(s, Math.floor(i / 24))), h: i % 24 });
   else if (scale === 'year' && type === 'bar') for (let m = 0; m < 12; m++) B.push({ k: 'm', m: `${s.getFullYear()}-${pad(m + 1)}` });
+  else if (scale === 'year') {
+    // roční čárový graf po týdnech (pondělí–neděle, první a poslední týden oříznuté na daný rok)
+    let d = s;
+    while (d < p.e) {
+      let e = addDays(d, 7 - ((d.getDay() + 6) % 7)); if (e > p.e) e = p.e;
+      B.push({ k: 'w', d: ymd(d), e: ymd(addDays(e, -1)) }); d = e;
+    }
+  }
   else for (let d = s; d < p.e; d = addDays(d, 1)) B.push({ k: 'd', d: ymd(d) });
   return B;
 }
@@ -681,6 +689,7 @@ function fillBuckets(B, hourly, daily) {
   for (const b of B) {
     if (b.k === 'h') { const r = hm.get(b.d + '|' + b.h); b.recs = r ? [r] : []; }
     else if (b.k === 'd') { const r = dm.get(b.d); b.recs = r ? [r] : []; }
+    else if (b.k === 'w') b.recs = daily.filter(r => r.d >= b.d && r.d <= b.e);
     else b.recs = daily.filter(r => r.d.startsWith(b.m));
   }
 }
@@ -735,7 +744,7 @@ function elapsedCut(p) {
 // první sloupec (bod) grafu, který už leží za srovnávaným úsekem
 function cutIndex(Bk, p, cut) {
   if (!isFinite(cut)) return null;
-  const i = Bk.findIndex(b => (b.k === 'm' ? dayDiff(p.s, parseYmd(b.m + '-01')) * 24 : dayDiff(p.s, parseYmd(b.d)) * 24 + (b.k === 'h' ? b.h : 0)) >= cut);
+  const i = Bk.findIndex(b => (b.k === 'm' ? dayDiff(p.s, parseYmd(b.m + '-01')) * 24 : b.k === 'w' ? dayDiff(p.s, parseYmd(b.e)) * 24 + 24 : dayDiff(p.s, parseYmd(b.d)) * 24 + (b.k === 'h' ? b.h : 0)) >= cut);
   return i < 0 ? null : i;
 }
 function cutRecs(X, cut) {
@@ -811,7 +820,8 @@ function drawChart(el, o) {
   let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.aria || 'Graf')}">`;
   s += `<defs><linearGradient id="gA" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34E89E"/><stop offset="0.55" stop-color="#3EE6F2"/><stop offset="1" stop-color="#38BDF8"/></linearGradient>`
     + `<linearGradient id="gB" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FDBA74"/><stop offset="1" stop-color="#EA580C"/></linearGradient>`
-    + `<linearGradient id="gL" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#14C07C"/><stop offset="0.55" stop-color="#10BCD3"/><stop offset="1" stop-color="#1D8FE0"/></linearGradient></defs>`;
+    + `<linearGradient id="gL" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#14C07C"/><stop offset="0.55" stop-color="#10BCD3"/><stop offset="1" stop-color="#1D8FE0"/></linearGradient>`
+    + FADE_DEFS + (o.tempColor ? tempGrad(y) : '') + `</defs>`;
   if (o.type === 'bar') for (let i = 0; i < n; i += 2) s += `<rect x="${f1(L + slot * i)}" y="${T}" width="${f1(slot)}" height="${f1(plotH)}" fill="#F5F6F8"/>`;
   s += '<g font-size="10" fill="#4B5563" font-family="inherit">';
   for (const t of sc.ticks) {
@@ -860,11 +870,11 @@ function drawChart(el, o) {
     }
     // druhé období se kreslí jako první, aby bylo v pozadí
     o.series.map((se, k) => [se, k]).reverse().forEach(([se, k]) => {
-      const col = k === 0 ? 'url(#gL)' : '#C2410C';
+      const col = k === 0 ? (o.tempColor ? 'url(#gT)' : 'url(#gL)') : '#C2410C';
       if (se.band) {
         let seg = [];
         const flush = () => {
-          if (seg.length > 1) s += `<polygon fill="url(#gA)" fill-opacity="0.22" points="${seg.map(([x, h]) => f1(x) + ',' + f1(y(h))).join(' ')} ${seg.slice().reverse().map(([x, , l]) => f1(x) + ',' + f1(y(l))).join(' ')}"/>`;
+          if (seg.length > 1) s += `<polygon fill="${o.tempColor ? '#94A3B8' : 'url(#gA)'}" fill-opacity="${o.tempColor ? 0.2 : 0.22}" points="${seg.map(([x, h]) => f1(x) + ',' + f1(y(h))).join(' ')} ${seg.slice().reverse().map(([x, , l]) => f1(x) + ',' + f1(y(l))).join(' ')}"/>`;
           seg = [];
         };
         let lastB = -1; se.band.forEach((b, i) => { if (b && b[0] != null && b[1] != null) lastB = i; });
@@ -884,6 +894,15 @@ function drawChart(el, o) {
       if (run === 1) s += `<circle cx="${f1(xc(lastI))}" cy="${f1(y(se.vals[lastI]))}" r="2.2" fill="${col}"/>`;
       // dokreslení k aktuálnímu měření (probíhající hodina ještě nemá hodinový záznam)
       if (k === 0 && o.tail && lastI >= 0 && o.tail.x > lastI + 0.5) d += (d ? 'L' : 'M') + f1(L + slot * o.tail.x) + ' ' + f1(y(o.tail.v));
+      // plocha pod čarou slábnoucí k ose (týdenní graf)
+      if (k === 0 && o.area && d) {
+        const base = f1(y(sc.lo));
+        for (const part of d.split('M').filter(Boolean)) {
+          const pts = part.split('L'); if (pts.length < 2) continue;
+          const x0 = pts[0].split(' ')[0], x1 = pts[pts.length - 1].split(' ')[0];
+          s += `<path d="M${part}L${x1} ${base}L${x0} ${base}Z" ${o.tempColor ? 'fill="url(#gT)" mask="url(#mF)"' : 'fill="url(#gF)"'} stroke="none"/>`;
+        }
+      }
       if (d) s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${o.thin ? 1.3 : n > 100 ? 1.8 : 2.4}" stroke-linejoin="round" stroke-linecap="round"${k ? ' stroke-opacity="0.85"' : ''}/>`;
     });
   }
@@ -932,6 +951,15 @@ function nearestPt(pts, min, maxDist = 15) {
   for (const p of pts) { const d = Math.abs(p[0] - min); if (d < bd) { bd = d; best = p; } }
   return bd <= maxDist ? best : null;
 }
+// barevná stupnice teploty podle Windy (pevná, nezávislá na rozsahu osy)
+const TEMP_SCALE = [[-20, '#9589D3'], [-15, '#95CFD7'], [-10, '#7FCAC5'], [-5, '#66B3B9'], [0, '#5F8EC2'], [5, '#508C3E'], [10, '#79911B'], [15, '#AAA00D'], [20, '#DEB005'], [25, '#F29605'], [30, '#EB5E14'], [35, '#BE4111'], [40, '#8A2909']];
+function tempGrad(y) {
+  const y1 = y(40), y2 = y(-20);
+  return `<linearGradient id="gT" gradientUnits="userSpaceOnUse" x1="0" y1="${y1}" x2="0" y2="${y2}">` + TEMP_SCALE.slice().reverse().map(([t, c]) => `<stop offset="${((y(t) - y1) / (y2 - y1)).toFixed(4)}" stop-color="${c}"/>`).join('') + '</linearGradient>';
+}
+// plocha pod čarou slábnoucí k ose (obecná barva a maska pro barvu teploty)
+const FADE_DEFS = `<linearGradient id="gF" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#14C07C" stop-opacity="0.5"/><stop offset="0.5" stop-color="#10BCD3" stop-opacity="0.22"/><stop offset="1" stop-color="#1D8FE0" stop-opacity="0.02"/></linearGradient>`
+  + `<linearGradient id="gMf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.6"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.28"/><stop offset="1" stop-color="#fff" stop-opacity="0.03"/></linearGradient><mask id="mF" maskContentUnits="objectBoundingBox"><rect width="1" height="1" fill="url(#gMf)"/></mask>`;
 const hhmm = mi => `${Math.floor(mi / 60)}:${pad(Math.round(mi % 60))}`;
 function drawFine(el, o) {
   const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 230, R = 4, Bm = 22; let T = 10;
@@ -950,10 +978,8 @@ function drawFine(el, o) {
   s += `<defs><linearGradient id="gA" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34E89E"/><stop offset="0.55" stop-color="#3EE6F2"/><stop offset="1" stop-color="#38BDF8"/></linearGradient>`
     + `<linearGradient id="gL" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#14C07C"/><stop offset="0.55" stop-color="#10BCD3"/><stop offset="1" stop-color="#1D8FE0"/></linearGradient>`
     + `<linearGradient id="gW" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#34E89E"/><stop offset="0.55" stop-color="#3EE6F2"/><stop offset="1" stop-color="#38BDF8"/></linearGradient>`
-    + `<linearGradient id="gF" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#14C07C" stop-opacity="0.5"/><stop offset="0.5" stop-color="#10BCD3" stop-opacity="0.22"/><stop offset="1" stop-color="#1D8FE0" stop-opacity="0.02"/></linearGradient>`
-    + `<linearGradient id="gMf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.6"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.28"/><stop offset="1" stop-color="#fff" stop-opacity="0.03"/></linearGradient><mask id="mF" maskContentUnits="objectBoundingBox"><rect width="1" height="1" fill="url(#gMf)"/></mask>`
-    // barevná stupnice teploty podle Windy
-    + (() => { const TS = [[-20, '#9589D3'], [-15, '#95CFD7'], [-10, '#7FCAC5'], [-5, '#66B3B9'], [0, '#5F8EC2'], [5, '#508C3E'], [10, '#79911B'], [15, '#AAA00D'], [20, '#DEB005'], [25, '#F29605'], [30, '#EB5E14'], [35, '#BE4111'], [40, '#8A2909']], y1 = y(40), y2 = y(-20); return `<linearGradient id="gT" gradientUnits="userSpaceOnUse" x1="0" y1="${y1}" x2="0" y2="${y2}">` + TS.slice().reverse().map(([t, c]) => `<stop offset="${((y(t) - y1) / (y2 - y1)).toFixed(4)}" stop-color="${c}"/>`).join('') + '</linearGradient>'; })()
+    + FADE_DEFS
+    + tempGrad(y)
     + `</defs>`;
   s += '<g font-size="10" fill="#4B5563" font-family="inherit">';
   for (const t of sc.ticks) {
@@ -1001,12 +1027,17 @@ function xAxis(scale, type, B) {
   if (scale === 'week') return { lab: i => D(i) ? DOW[D(i).getDay()] : '', grid: () => false };
   if (scale === 'month') return { lab: i => [0, 4, 9, 14, 19, 24, 29].includes(i) ? (i + 1) + '.' : '', grid: () => false };
   if (type === 'bar') return { lab: i => MON[i] || '', grid: () => false };
+  if (B[0] && B[0].k === 'w') {
+    const has = (i, day) => { const b = B[i]; if (!b) return null; for (let d = parseYmd(b.d); ymd(d) <= b.e; d = addDays(d, 1)) if (d.getDate() === day) return d; return null; };
+    return { lab: i => { const d = has(i, 15); return d ? MON[d.getMonth()] : ''; }, grid: i => i > 0 && !!has(i, 1) };
+  }
   return { lab: i => D(i) && D(i).getDate() === 15 ? MON[D(i).getMonth()] : '', grid: i => i > 0 && D(i) && D(i).getDate() === 1 };
 }
 function bucketName(b, scale) {
   if (!b) return '';
   if (b.k === 'h') { const d = parseYmd(b.d); return (scale === 'day' ? '' : `${DOW[d.getDay()]} ${d.getDate()}. ${d.getMonth() + 1}. `) + `${b.h}:00–${b.h + 1}:00`; }
   if (b.k === 'd') { const d = parseYmd(b.d); return `${DOW[d.getDay()]} ${d.getDate()}. ${d.getMonth() + 1}. ${d.getFullYear()}`; }
+  if (b.k === 'w') { const a = parseYmd(b.d), e = parseYmd(b.e); return `${isoWeek(a)}. týden · ${a.getDate()}. ${a.getMonth() + 1}.–${e.getDate()}. ${e.getMonth() + 1}. ${e.getFullYear()}`; }
   const [y, m] = b.m.split('-'); return MONL[+m - 1] + ' ' + y;
 }
 
@@ -1127,10 +1158,11 @@ function chartOpts(a, b) {
   const n = Math.max(a.Bk.length, b ? b.Bk.length : 0);
   const padTo = arr => { const r = arr.slice(); while (r.length < n) r.push(null); return r; };
   const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
-  const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
+  const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' && st.scale !== 'week' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
   const wv = st.v === 'wind' || st.v === 'gust';
   const o = { type, n, series, icons: st.scale === 'day' && !b && !wv ? iconRow() : null, arrows: st.scale === 'day' && !b && wv ? windRow() : null, thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+  if (!b && type === 'line') { o.area = st.scale === 'week'; o.tempColor = st.v === 'temp'; }
   const cutAB = b ? Math.min(elapsedCut(model.A.p), elapsedCut(model.B.p)) : Infinity;
   if (b && isFinite(cutAB)) { const lb = b.Bk.length > a.Bk.length ? [b.Bk, model.B.p] : [a.Bk, model.A.p]; o.dimFrom = cutIndex(lb[0], lb[1], cutAB); }
   const future = st.scale === 'day' && !b && st.anchor > today();
