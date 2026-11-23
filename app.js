@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 37;
+const APP_VERSION = 38;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -444,6 +444,7 @@ const MODELS = [
   { k: 'dmi', n: 'DMI', full: 'Harmonie Evropa – DMI, Dánsko', om: 'dmi_harmonie_arome_europe', c: '#57534E' }
 
 ];
+const VAR_ORDER = ['temp', 'rain', 'wind', 'gust', 'press', 'hum', 'dew', 'solar', 'uv'];
 const MODEL = Object.fromEntries(MODELS.map(m => [m.k, m]));
 let fcModels = LS.get('meteo.fcmodels', ['aladin', 'icon', 'ecmwf', 'yr']).filter(k => MODEL[k]);
 let fcOn = LS.get('meteo.fcon', null) || fcModels.slice();
@@ -932,7 +933,7 @@ let model = null, current = null, cur = null, seq = 0;
 const fmtU = (v, V, dec) => fmt(v, dec ?? V.dec) + (V.u ? ' ' + V.u : '');
 
 function renderControls() {
-  $('vars').innerHTML = Object.entries(VARS).map(([k, V]) => `<button class="chip${k === st.v ? ' on' : ''}" data-v="${k}" aria-pressed="${k === st.v}">${V.n}</button>`).join('');
+  $('vars').innerHTML = VAR_ORDER.map(k => [k, VARS[k]]).map(([k, V]) => `<button class="chip${k === st.v ? ' on' : ''}" data-v="${k}" aria-pressed="${k === st.v}">${V.n}</button>`).join('');
   for (const b of $('scales').children) { const on = b.dataset.s === st.scale; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
   for (const b of $('types').children) { const on = b.dataset.t === chartType(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
   const V = VARS[st.v];
@@ -1216,10 +1217,11 @@ function renderCurrent() {
   const m = cur.metric || {};
   const tiles = [
     ['Teplota', fmt(num(m.temp), 1), '°C'], ['Vlhkost', fmt(num(cur.humidity), 0), '%'],
-    ['Tlak', fmt(num(m.pressure), 1), 'hPa'], ['Vítr', fmt(num(m.windSpeed), 1), 'km/h' + (num(cur.winddir) != null ? ' · ' + DIRS[Math.round(cur.winddir / 45) % 8] : '')],
-    ['Nárazy', fmt(num(m.windGust), 1), 'km/h'], ['Srážky dnes', fmt(num(m.precipTotal), 1), 'mm'],
-    ['Záření', fmt(num(cur.solarRadiation), 0), 'W/m²'], ['UV', fmt(num(cur.uv), 1), '']
+    ['Tlak', fmt(num(m.pressure), 1), 'hPa'], ['Srážky dnes', fmt(num(m.precipTotal), 1), 'mm'],
+    ['Vítr', fmt(num(m.windSpeed), 1), 'km/h' + (num(cur.winddir) != null ? ' · ' + DIRS[Math.round(cur.winddir / 45) % 8] : '')],
+    ['Nárazy', fmt(num(m.windGust), 1), 'km/h'], ['Záření', fmt(num(cur.solarRadiation), 0), 'W/m²'], ['UV', fmt(num(cur.uv), 1), '']
   ];
+
   $('now').innerHTML = tiles.map(([l, v, u]) => `<div class="tile"><span class="l">${l}</span><span class="v">${v}</span><span class="u">${u || '&nbsp;'}</span></div>`).join('');
   const nb = cur.neighborhood ? cur.neighborhood + ' · ' : '';
   $('stationName').textContent = nb + cfg.station;
