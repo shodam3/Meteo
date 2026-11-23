@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 50;
+const APP_VERSION = 51;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -347,16 +347,18 @@ function dayDetail(d) {
 }
 const EXT = { temp: ['tempHigh', 'tempLow'], dew: ['dewptHigh', 'dewptLow'], hum: ['humidityHigh', 'humidityLow'], press: ['pressureMax', 'pressureMin'], wind: ['windspeedHigh', null], gust: ['windgustHigh', null], solar: ['solarRadiationHigh', null], uv: ['uvHigh', null] };
 async function rain5load(d) {
-  const key = 'day5d/' + d, e = await idb.get(key);
-  if (e && (e.final || Date.now() - e.fetchedAt < STALE)) return e;
+  const key = 'day5d/' + d, e = await idb.get(key), isToday = d === ymd(today());
+  // dnešní podrobná data se stahují při každém obnovení (každých 5 minut)
+  if (e && (e.final || Date.now() - e.fetchedAt < (isToday ? 4 * 60e3 : STALE))) return e;
   setBusy(1);
   try {
     // u dneška bývá historie neúplná, proto se doplní měřeními za posledních 24 hodin
     let obs = [];
-    const isToday = d === ymd(today());
-    try { obs = await wuGet('history/all', { date: d.replace(/-/g, '') }); } catch (err) { if (!isToday) throw err; }
+    // u dneška stačí měření za posledních 24 hodin (jeden dotaz), historie dne se použije jen jako záloha
+    if (!isToday) obs = await wuGet('history/all', { date: d.replace(/-/g, '') });
     if (isToday) {
-      const x = await wuGet('observations/all/1day');
+      let x = [];
+      try { x = await wuGet('observations/all/1day'); } catch (err) { x = await wuGet('history/all', { date: d.replace(/-/g, '') }); }
       const seen = new Map(); for (const o of obs.concat(x)) { const t = String(o.obsTimeLocal || ''); if (t.startsWith(d)) seen.set(t, o); }
       obs = [...seen.values()].sort((a, b) => String(a.obsTimeLocal) < String(b.obsTimeLocal) ? -1 : 1);
     }
@@ -942,7 +944,8 @@ function monoPath(P) {
 // rozdělení na souvislé úseky (mezera v měření delší než 20 minut čáru přeruší)
 function segments(pts, gap = 20) {
   const out = []; let cur = [];
-  for (const p of pts) { if (cur.length && p[0] - cur[cur.length - 1][0] > gap) { out.push(cur); cur = []; } cur.push(p); }
+  // poslední aktuální měření se ke křivce připojí vždy, i po delší mezeře
+  pts.forEach((p, i) => { if (cur.length && p[0] - cur[cur.length - 1][0] > gap && !(pts.live && i === pts.length - 1)) { out.push(cur); cur = []; } cur.push(p); });
   if (cur.length) out.push(cur);
   return out;
 }
@@ -1176,7 +1179,7 @@ function chartOpts(a, b) {
       if (isToday && cur && String(cur.obsTimeLocal || '').startsWith(ymd(today()))) {
         const m = cur.metric || {}, cv = num({ temp: m.temp, dew: m.dewpt, hum: cur.humidity, press: m.pressure, wind: m.windSpeed, gust: m.windGust, solar: cur.solarRadiation, uv: cur.uv, rain: m.precipTotal }[st.v]);
         const ct = String(cur.obsTimeLocal).slice(11, 16).split(':').map(Number), mi = ct[0] * 60 + ct[1];
-        if (cv != null && (!pts.length || mi > pts[pts.length - 1][0] + 2)) pts.push([mi, cv]);
+        if (cv != null && (!pts.length || mi > pts[pts.length - 1][0] + 2)) { pts.push([mi, cv]); pts.live = true; }
       }
       return pts.length ? pts : null;
     };
