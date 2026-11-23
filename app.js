@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 39;
+const APP_VERSION = 40;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1224,7 +1224,7 @@ function renderCurrent() {
 
   $('now').innerHTML = tiles.map(([l, v, u]) => `<div class="tile"><span class="l">${l}</span><span class="v">${v}</span><span class="u">${u || '&nbsp;'}</span></div>`).join('');
   const nb = cur.neighborhood ? cur.neighborhood + ' · ' : '';
-  $('stationName').textContent = nb + cfg.station;
+  void nb;
   renderStatus();
 }
 function renderStatus() {
@@ -1237,7 +1237,9 @@ function renderStatus() {
   }
   if (!warn && s.dataset.note) txt = s.dataset.note;
   const t = today(), dt = `${DOWL[t.getDay()]} ${t.getDate()}. ${t.getMonth() + 1}. ${t.getFullYear()}`;
-  s.innerHTML = `<span class="today">${esc(dt.charAt(0).toUpperCase() + dt.slice(1))}</span>` + (txt ? ' · ' + esc(txt) : ''); s.classList.toggle('warn', warn);
+  // aktuální datum pod nadpisem, ve stavovém řádku jen čas měření
+  $('stationName').innerHTML = `<span class="today">${esc(dt.charAt(0).toUpperCase() + dt.slice(1))}</span>`;
+  s.textContent = txt; s.classList.toggle('warn', warn);
 }
 // poloha stanice pro předpovědi; vrací true, když byla zjištěna poprvé
 function setCoords(o) {
@@ -1501,7 +1503,7 @@ function start() {
     $('chart').innerHTML = '<div class="empty">Začněte zadáním ID stanice a klíče v nastavení (ozubené kolečko vpravo nahoře).</div>';
     $('btnSettings').click(); return;
   }
-  $('stationName').textContent = cfg.station;
+  renderStatus();
   lastTick = Date.now(); loadCurrent(); refresh();
 }
 if (typeof window !== 'undefined' && !window.__METEO_TEST__) start();
