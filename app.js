@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 47;
+const APP_VERSION = 48;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1197,6 +1197,15 @@ function chartOpts(a, b) {
     if (cur && String(cur.obsTimeLocal || '').startsWith(ymd(today()))) { const ct = String(cur.obsTimeLocal).slice(11, 16).split(':').map(Number); mi = ct[0] * 60 + ct[1]; }
     if (mi == null) { const nw = new Date(); mi = nw.getHours() * 60 + nw.getMinutes(); }
     o.partial = { i: Math.floor(mi / 60), frac: Math.max(0.08, (mi % 60) / 60) };
+  }
+  // probíhající den (týden, měsíc) nebo měsíc (rok) má sloupec široký podle uplynulé části
+  if (st.scale !== 'day' && type === 'bar' && !b) {
+    const t = today(), nw = new Date(), dayFrac = (nw.getHours() * 60 + nw.getMinutes()) / 1440;
+    const i = a.Bk.findIndex(k => k.k === 'd' ? k.d === ymd(t) : k.k === 'm' && k.m === ymd(t).slice(0, 7));
+    if (i >= 0) {
+      const dim = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
+      o.partial = { i, frac: Math.max(0.08, a.Bk[i].k === 'm' ? (t.getDate() - 1 + dayFrac) / dim : dayFrac) };
+    }
   }
   if (fcApplicable() && type === 'line') {
     o.fc = fcSeries(model.fc || {}, a.Bk, st.v);
