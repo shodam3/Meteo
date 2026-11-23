@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 42;
+const APP_VERSION = 43;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -569,6 +569,18 @@ async function loadForecasts() {
   const out = {}; keys.forEach((k, i) => { if (res[i].status === 'fulfilled') out[k] = res[i].value; });
   return out;
 }
+// doplní předpovědi zapnutých modelů, které v načtených datech chybí (např. po přepnutí z veličiny bez předpovědí)
+async function fillFc() {
+  if (!model || !fcApplicable()) return;
+  const m0 = model, miss = fcModels.filter(k => fcOn.includes(k) && !(m0.fc || {})[k]);
+  if (!miss.length) return;
+  const res = await Promise.allSettled(miss.map(fcGet));
+  if (model !== m0) return;
+  const add = {}; miss.forEach((k, i) => { if (res[i].status === 'fulfilled') add[k] = res[i].value; });
+  if (!Object.keys(add).length) return;
+  model.fc = { ...(model.fc || {}), ...add };
+  if (fcApplicable()) draw();
+}
 const FCI = { temp: 2, rain: 3, wind: 4, gust: 5, press: 6 };
 const FCI0 = { temp: 7, rain: 8, wind: 9, gust: 10, press: 11 };
 // předpovědi pro jemný graf dne: body v celých hodinách 0–24 h (u srážek průběžný úhrn od půlnoci)
@@ -1023,7 +1035,7 @@ async function refresh() {
     if (my !== seq || !model) return;
     const ic = await icP, wd = await wdP;
     if (my !== seq || !model) return;
-    model.fc = fc; model.icons = ic; model.windFc = wd;
+    model.fc = { ...(model.fc || {}), ...fc }; model.icons = ic; model.windFc = wd;
     if (Object.keys(fc).length || ic || wd) draw();
   } catch (err) {
     if (my !== seq) return;
@@ -1390,7 +1402,7 @@ function bindUI() {
   $('vars').addEventListener('click', e => {
     const b = e.target.closest('[data-v]'); if (!b) return;
     st.v = b.dataset.v; st.sel = null; saveView();
-    if ((st.v === 'rain' && (st.scale === 'day' || st.scale === 'week')) || ((st.v === 'wind' || st.v === 'gust') && iconsWanted() && !(model && model.windFc))) refresh(); else { renderControls(); draw(); }
+    if ((st.v === 'rain' && (st.scale === 'day' || st.scale === 'week')) || ((st.v === 'wind' || st.v === 'gust') && iconsWanted() && !(model && model.windFc))) refresh(); else { renderControls(); draw(); fillFc(); }
   });
   $('scales').addEventListener('click', e => { const b = e.target.closest('[data-s]'); if (!b || b.dataset.s === st.scale) return; st.scale = b.dataset.s; st.sel = null; saveView(); refresh(); });
   $('types').addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; st.charts[st.v] = b.dataset.t; st.sel = null; saveView(); renderControls(); draw(); });
