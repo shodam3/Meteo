@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 48;
+const APP_VERSION = 49;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -951,8 +951,8 @@ function nearestPt(pts, min, maxDist = 15) {
   for (const p of pts) { const d = Math.abs(p[0] - min); if (d < bd) { bd = d; best = p; } }
   return bd <= maxDist ? best : null;
 }
-// barevná stupnice teploty podle Windy (pevná, nezávislá na rozsahu osy)
-const TEMP_SCALE = [[-20, '#9589D3'], [-15, '#95CFD7'], [-10, '#7FCAC5'], [-5, '#66B3B9'], [0, '#5F8EC2'], [5, '#508C3E'], [10, '#79911B'], [15, '#AAA00D'], [20, '#DEB005'], [25, '#F29605'], [30, '#EB5E14'], [35, '#BE4111'], [40, '#8A2909']];
+// barevná stupnice teploty: pořadí barev podle Windy, sytost a jas jako ostatní grafy (pevná, nezávislá na rozsahu osy)
+const TEMP_SCALE = [[-20, '#8B5CF6'], [-15, '#38C6E0'], [-10, '#22B8C9'], [-5, '#1AA3B8'], [0, '#1D8FE0'], [5, '#14C07C'], [10, '#7CC21A'], [15, '#C2C412'], [20, '#F2C200'], [25, '#F7931E'], [30, '#F0521D'], [35, '#D9341A'], [40, '#A8211A']];
 function tempGrad(y) {
   const y1 = y(40), y2 = y(-20);
   return `<linearGradient id="gT" gradientUnits="userSpaceOnUse" x1="0" y1="${y1}" x2="0" y2="${y2}">` + TEMP_SCALE.slice().reverse().map(([t, c]) => `<stop offset="${((y(t) - y1) / (y2 - y1)).toFixed(4)}" stop-color="${c}"/>`).join('') + '</linearGradient>';
