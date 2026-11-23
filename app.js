@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 44;
+const APP_VERSION = 45;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -949,7 +949,12 @@ function drawFine(el, o) {
   let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.aria || 'Graf')}">`;
   s += `<defs><linearGradient id="gA" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34E89E"/><stop offset="0.55" stop-color="#3EE6F2"/><stop offset="1" stop-color="#38BDF8"/></linearGradient>`
     + `<linearGradient id="gL" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#14C07C"/><stop offset="0.55" stop-color="#10BCD3"/><stop offset="1" stop-color="#1D8FE0"/></linearGradient>`
-    + `<linearGradient id="gW" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#34E89E"/><stop offset="0.55" stop-color="#3EE6F2"/><stop offset="1" stop-color="#38BDF8"/></linearGradient></defs>`;
+    + `<linearGradient id="gW" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#34E89E"/><stop offset="0.55" stop-color="#3EE6F2"/><stop offset="1" stop-color="#38BDF8"/></linearGradient>`
+    + `<linearGradient id="gF" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#14C07C" stop-opacity="0.5"/><stop offset="0.5" stop-color="#10BCD3" stop-opacity="0.22"/><stop offset="1" stop-color="#1D8FE0" stop-opacity="0.02"/></linearGradient>`
+    + `<linearGradient id="gMf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.6"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.28"/><stop offset="1" stop-color="#fff" stop-opacity="0.03"/></linearGradient><mask id="mF" maskContentUnits="objectBoundingBox"><rect width="1" height="1" fill="url(#gMf)"/></mask>`
+    // barevná stupnice teploty: velký mráz fialová, mráz modrá, teplo žlutá až červená
+    + (() => { const TS = [[-20, '#7E22CE'], [-12, '#6D28D9'], [-6, '#4338CA'], [-1, '#2563EB'], [4, '#0EA5E9'], [10, '#14B8A6'], [16, '#22C55E'], [21, '#EAB308'], [27, '#F97316'], [33, '#DC2626']], y1 = y(33), y2 = y(-20); return `<linearGradient id="gT" gradientUnits="userSpaceOnUse" x1="0" y1="${y1}" x2="0" y2="${y2}">` + TS.slice().reverse().map(([t, c]) => `<stop offset="${((y(t) - y1) / (y2 - y1)).toFixed(4)}" stop-color="${c}"/>`).join('') + '</linearGradient>'; })()
+    + `</defs>`;
   s += '<g font-size="10" fill="#4B5563" font-family="inherit">';
   for (const t of sc.ticks) {
     const yy = f1(y(t));
@@ -969,8 +974,10 @@ function drawFine(el, o) {
     const d = monoPath(px(sg));
     // podkres od čáry dolů k ose
     const base = f1(y(sc.lo)), x0 = f1(x(sg[0][0])), x1 = f1(x(sg[sg.length - 1][0]));
-    s += `<path d="${d}L${x1} ${base}L${x0} ${base}Z" fill="url(#gW)" fill-opacity="0.25" stroke="none"/>`
-      + `<path d="${d}" fill="none" stroke="url(#gL)" stroke-width="${o.thin ? 1.3 : 2.4}" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const TT = st.v === 'temp'; // plocha slábne směrem k ose, u teploty barva podle hodnoty
+    const fill = TT ? 'fill="url(#gT)" mask="url(#mF)"' : 'fill="url(#gF)"';
+    s += `<path d="${d}L${x1} ${base}L${x0} ${base}Z" ${fill} stroke="none"/>`
+      + `<path d="${d}" fill="none" stroke="url(#${TT ? 'gT' : 'gL'})" stroke-width="${o.thin ? 1.3 : 2.4}" stroke-linejoin="round" stroke-linecap="round"/>`;
   }
   // část za srovnávaným úsekem (souhrn ji nezapočítává) je ztlumená
   { const DX = o.dimFromMin != null ? x(o.dimFromMin) : null; if (DX != null) s += `<rect x="${f1(DX)}" y="${T}" width="${f1(W - R - DX)}" height="${f1(plotH)}" fill="#fff" fill-opacity="0.72"/><line x1="${f1(DX)}" y1="${T}" x2="${f1(DX)}" y2="${T + plotH}" stroke="#6B7280" stroke-width="1" stroke-dasharray="3 3"/>`; }
