@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 45;
+const APP_VERSION = 46;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -952,8 +952,8 @@ function drawFine(el, o) {
     + `<linearGradient id="gW" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#34E89E"/><stop offset="0.55" stop-color="#3EE6F2"/><stop offset="1" stop-color="#38BDF8"/></linearGradient>`
     + `<linearGradient id="gF" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#14C07C" stop-opacity="0.5"/><stop offset="0.5" stop-color="#10BCD3" stop-opacity="0.22"/><stop offset="1" stop-color="#1D8FE0" stop-opacity="0.02"/></linearGradient>`
     + `<linearGradient id="gMf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.6"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.28"/><stop offset="1" stop-color="#fff" stop-opacity="0.03"/></linearGradient><mask id="mF" maskContentUnits="objectBoundingBox"><rect width="1" height="1" fill="url(#gMf)"/></mask>`
-    // barevná stupnice teploty: velký mráz fialová, mráz modrá, teplo žlutá až červená
-    + (() => { const TS = [[-20, '#7E22CE'], [-12, '#6D28D9'], [-6, '#4338CA'], [-1, '#2563EB'], [4, '#0EA5E9'], [10, '#14B8A6'], [16, '#22C55E'], [21, '#EAB308'], [27, '#F97316'], [33, '#DC2626']], y1 = y(33), y2 = y(-20); return `<linearGradient id="gT" gradientUnits="userSpaceOnUse" x1="0" y1="${y1}" x2="0" y2="${y2}">` + TS.slice().reverse().map(([t, c]) => `<stop offset="${((y(t) - y1) / (y2 - y1)).toFixed(4)}" stop-color="${c}"/>`).join('') + '</linearGradient>'; })()
+    // barevná stupnice teploty podle Windy
+    + (() => { const TS = [[-20, '#9589D3'], [-15, '#95CFD7'], [-10, '#7FCAC5'], [-5, '#66B3B9'], [0, '#5F8EC2'], [5, '#508C3E'], [10, '#79911B'], [15, '#AAA00D'], [20, '#DEB005'], [25, '#F29605'], [30, '#EB5E14'], [35, '#BE4111'], [40, '#8A2909']], y1 = y(40), y2 = y(-20); return `<linearGradient id="gT" gradientUnits="userSpaceOnUse" x1="0" y1="${y1}" x2="0" y2="${y2}">` + TS.slice().reverse().map(([t, c]) => `<stop offset="${((y(t) - y1) / (y2 - y1)).toFixed(4)}" stop-color="${c}"/>`).join('') + '</linearGradient>'; })()
     + `</defs>`;
   s += '<g font-size="10" fill="#4B5563" font-family="inherit">';
   for (const t of sc.ticks) {
