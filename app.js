@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 43;
+const APP_VERSION = 44;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -732,6 +732,12 @@ function elapsedCut(p) {
   const t = today(); if (t < p.s || t >= p.e) return Infinity;
   return dayDiff(p.s, t) * 24 + new Date().getHours() + 1;
 }
+// první sloupec (bod) grafu, který už leží za srovnávaným úsekem
+function cutIndex(Bk, p, cut) {
+  if (!isFinite(cut)) return null;
+  const i = Bk.findIndex(b => (b.k === 'm' ? dayDiff(p.s, parseYmd(b.m + '-01')) * 24 : dayDiff(p.s, parseYmd(b.d)) * 24 + (b.k === 'h' ? b.h : 0)) >= cut);
+  return i < 0 ? null : i;
+}
 function cutRecs(X, cut) {
   if (!isFinite(cut)) return X;
   const f = r => dayDiff(X.p.s, parseYmd(r.d)) * 24 + (r.h != null ? r.h : 0) < cut;
@@ -745,11 +751,31 @@ function nice(mn, mx, zero, cap) {
   if (zero) mn = Math.min(0, mn);
   if (mx - mn < 1e-9) { mn -= 1; mx += 1; if (zero && mn < 0) { mx -= mn; mn = 0; } }
   const span = mx - mn, raw = span / 4, mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map(q => q * mag).find(q => q >= raw - 1e-12);
-  let lo = Math.floor(mn / step + 1e-9) * step, hi = Math.ceil(mx / step - 1e-9) * step;
-  if (hi - mx < span * 0.08) hi += step;
-  if (cap != null) hi = Math.min(hi, cap);
-  if (!(zero && lo >= 0) && mn - lo < span * 0.08) lo -= step;
+  // zkusí několik kroků a vybere nejužší osu, která má u krajních hodnot aspoň 5 % volného místa a 4–8 popisků
+  let best = null;
+  for (const e of [mag / 10, mag, mag * 10]) for (const q of [1, 2, 2.5, 5]) {
+    const step = q * e; if (step < raw / 3 || step > raw * 3) continue;
+    let lo = Math.floor(mn / step + 1e-9) * step, hi = Math.ceil(mx / step - 1e-9) * step;
+    for (let k = 0; k < 3; k++) {
+      const pad = (hi - lo) * 0.05;
+      if (cap == null && hi - mx < pad) hi += step;
+      if (!(zero && lo >= 0) && mn - lo < pad) lo -= step;
+    }
+    if (cap != null) hi = Math.min(hi, cap);
+    const nt = Math.round((hi - lo) / step) + 1;
+    if (nt < 4 || nt > 8) continue;
+    const r = hi - lo;
+    if (!best || r < best.r - 1e-9 || (Math.abs(r - best.r) < 1e-9 && step > best.step)) best = { lo, hi, step, r };
+  }
+  if (!best) { // záloha: původní postup
+    const step = [1, 2, 2.5, 5, 10].map(q => q * mag).find(q => q >= raw - 1e-12);
+    let lo = Math.floor(mn / step + 1e-9) * step, hi = Math.ceil(mx / step - 1e-9) * step;
+    if (hi - mx < span * 0.08) hi += step;
+    if (cap != null) hi = Math.min(hi, cap);
+    if (!(zero && lo >= 0) && mn - lo < span * 0.08) lo -= step;
+    best = { lo, hi, step };
+  }
+  const { lo, hi, step } = best;
   const ticks = []; for (let t = lo; t <= hi + step / 1000; t += step) ticks.push(Math.round(t / step) * step);
   return { lo, hi, step, ticks };
 }
@@ -861,6 +887,8 @@ function drawChart(el, o) {
       if (d) s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${o.thin ? 1.3 : n > 100 ? 1.8 : 2.4}" stroke-linejoin="round" stroke-linecap="round"${k ? ' stroke-opacity="0.85"' : ''}/>`;
     });
   }
+  // část za srovnávaným úsekem (souhrn ji nezapočítává) je ztlumená
+  { const DX = o.dimFrom != null && o.dimFrom < n ? L + slot * o.dimFrom : null; if (DX != null) s += `<rect x="${f1(DX)}" y="${T}" width="${f1(W - R - DX)}" height="${f1(plotH)}" fill="#fff" fill-opacity="0.72"/><line x1="${f1(DX)}" y1="${T}" x2="${f1(DX)}" y2="${T + plotH}" stroke="#6B7280" stroke-width="1" stroke-dasharray="3 3"/>`; }
   if (o.sel != null && o.sel < n) {
     s += `<line x1="${f1(xc(o.sel))}" y1="${T}" x2="${f1(xc(o.sel))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-opacity="0.5"/>`;
     if (o.type === 'line' && o.fc) for (const f of o.fc) { const v = f.vals[o.sel]; if (v != null) s += `<circle cx="${f1(xc(o.sel))}" cy="${f1(y(v))}" r="3" fill="#fff" stroke="${f.color}" stroke-width="1.5"/>`; }
@@ -944,6 +972,8 @@ function drawFine(el, o) {
     s += `<path d="${d}L${x1} ${base}L${x0} ${base}Z" fill="url(#gW)" fill-opacity="0.25" stroke="none"/>`
       + `<path d="${d}" fill="none" stroke="url(#gL)" stroke-width="${o.thin ? 1.3 : 2.4}" stroke-linejoin="round" stroke-linecap="round"/>`;
   }
+  // část za srovnávaným úsekem (souhrn ji nezapočítává) je ztlumená
+  { const DX = o.dimFromMin != null ? x(o.dimFromMin) : null; if (DX != null) s += `<rect x="${f1(DX)}" y="${T}" width="${f1(W - R - DX)}" height="${f1(plotH)}" fill="#fff" fill-opacity="0.72"/><line x1="${f1(DX)}" y1="${T}" x2="${f1(DX)}" y2="${T + plotH}" stroke="#6B7280" stroke-width="1" stroke-dasharray="3 3"/>`; }
   if (o.sel != null) {
     s += `<line x1="${f1(x(o.sel))}" y1="${T}" x2="${f1(x(o.sel))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-opacity="0.5"/>`;
     const pa = nearestPt(o.a, o.sel), pb = nearestPt(o.b, o.sel);
@@ -1094,6 +1124,8 @@ function chartOpts(a, b) {
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
   const wv = st.v === 'wind' || st.v === 'gust';
   const o = { type, n, series, icons: st.scale === 'day' && !b && !wv ? iconRow() : null, arrows: st.scale === 'day' && !b && wv ? windRow() : null, thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+  const cutAB = b ? Math.min(elapsedCut(model.A.p), elapsedCut(model.B.p)) : Infinity;
+  if (b && isFinite(cutAB)) { const lb = b.Bk.length > a.Bk.length ? [b.Bk, model.B.p] : [a.Bk, model.A.p]; o.dimFrom = cutIndex(lb[0], lb[1], cutAB); }
   const future = st.scale === 'day' && !b && st.anchor > today();
   // čárový graf dne z podrobných měření
   if (st.scale === 'day' && type === 'line' && (model.A.fine || future || (b && model.B && model.B.fine))) {
@@ -1111,6 +1143,7 @@ function chartOpts(a, b) {
     const isT = dayDiff(today(), st.anchor) === 0;
     const isWind = st.v === 'wind' || st.v === 'gust';
     const fo = { fine: true, icons: isWind ? null : iconRow(), arrows: isWind ? windRow() : null, thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, a: toPts(model.A, isT), b: b ? toPts(model.B, false) : null, zero: !!V.zero, dec: V.dec, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+    if (b && isFinite(cutAB) && cutAB < 24) fo.dimFromMin = cutAB * 60;
     if (fcApplicable()) fo.fc = fcFine(model.fc || {}, ymd(st.anchor), st.v);
     if (isT && !b) { const nw = new Date(); fo.now = nw.getHours() * 60 + nw.getMinutes(); }
     if (future) fo.emptyMsg = !FC_VARS.includes(st.v) ? 'Předpověď pro tuto veličinu není k dispozici.'
