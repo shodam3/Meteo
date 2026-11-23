@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 38;
+const APP_VERSION = 39;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1443,6 +1443,18 @@ function bindUI() {
   $('btnClose').onclick = () => { closeSheet('settings'); };
   $('btnBack').onclick = () => { closeSheet('settings'); };
   $('settings').addEventListener('click', e => { if (e.target === $('settings')) closeSheet('settings'); });
+  // kopírování klíče do schránky (z pole typu heslo prohlížeče kopírovat nedovolí)
+  $('settings').addEventListener('click', async e => {
+    const b = e.target.closest('[data-copy]'); if (!b) return;
+    e.preventDefault();
+    const v = $(b.dataset.copy).value; if (!v) return;
+    let ok = false;
+    try { await navigator.clipboard.writeText(v); ok = true; } catch { }
+    if (!ok) {
+      try { const t = document.createElement('textarea'); t.value = v; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.select(); ok = document.execCommand('copy'); t.remove(); } catch { }
+    }
+    const old = b.textContent; b.textContent = ok ? 'Zkopírováno' : 'Nepodařilo se'; setTimeout(() => { b.textContent = old; }, 1500);
+  });
   $('btnShow').onclick = () => { for (const id of ['fWuKey', 'fGhToken']) $(id).type = $(id).type === 'password' ? 'text' : 'password'; };
   $('btnSave').onclick = async () => {
     const msg = $('setMsg'); msg.className = 'msg'; msg.textContent = 'Ověřuji…';

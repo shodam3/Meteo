@@ -52,6 +52,9 @@ h1{margin:0;font-size:22px;font-weight:700}
 .fcb.bad{opacity:.55;text-decoration:line-through}
 table.fct td{font-weight:600}
 .chks{display:flex;flex-direction:column;gap:2px}
+.keyrow{display:flex;gap:6px;align-items:center}
+.keyrow input{flex:1;min-width:0}
+.keyrow .btn{flex:none;height:44px}
 label.chk{flex-direction:row;align-items:center;gap:10px;font-weight:500;min-height:40px}
 label.chk input{width:20px;height:20px;flex:none}
 label.chk .sw{width:12px;height:12px;border-radius:3px;flex:none}
@@ -187,12 +190,12 @@ legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bot
 <fieldset>
 <legend>Weather Underground</legend>
 <label>ID stanice<small>Najdete ho na wunderground.com v části My Devices, např. IPRAHA123.</small><input type="text" id="fStation" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
-<label>Přístupový klíč (API Key)<small>wunderground.com → účet → API Keys</small><input type="password" id="fWuKey" autocomplete="off" spellcheck="false"></label>
+<label>Přístupový klíč (API Key)<small>wunderground.com → účet → API Keys</small><span class="keyrow"><input type="password" id="fWuKey" autocomplete="off" spellcheck="false"><button type="button" class="btn" data-copy="fWuKey">Kopírovat</button></span></label>
 </fieldset>
 <fieldset>
 <legend>Ukládání na GitHub (nepovinné)</legend>
 <label>Soukromý repozitář pro data<input type="text" id="fRepo" autocomplete="off" spellcheck="false" placeholder="meteo-data"></label>
-<label>Přístupový klíč GitHubu<small>Fine-grained token jen pro tento repozitář, oprávnění Contents: Read and write.</small><input type="password" id="fGhToken" autocomplete="off" spellcheck="false" placeholder="github_pat_…"></label>
+<label>Přístupový klíč GitHubu<small>Fine-grained token jen pro tento repozitář, oprávnění Contents: Read and write.</small><span class="keyrow"><input type="password" id="fGhToken" autocomplete="off" spellcheck="false" placeholder="github_pat_…"><button type="button" class="btn" data-copy="fGhToken">Kopírovat</button></span></label>
 </fieldset>
 <div class="row"><button class="btn solid" id="btnSave">Uložit a ověřit</button><button class="btn" id="btnShow">Zobrazit klíče</button></div>
 <div class="msg" id="setMsg"></div>
@@ -220,6 +223,6 @@ legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bot
 </div>
 </div>
 
-<script src="app.js?v=38"></script>
+<script src="app.js?v=39"></script>
 </body>
 </html>
