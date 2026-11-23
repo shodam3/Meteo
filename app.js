@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 49;
+const APP_VERSION = 50;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -760,9 +760,9 @@ function nice(mn, mx, zero, cap) {
   if (zero) mn = Math.min(0, mn);
   if (mx - mn < 1e-9) { mn -= 1; mx += 1; if (zero && mn < 0) { mx -= mn; mn = 0; } }
   const span = mx - mn, raw = span / 4, mag = 10 ** Math.floor(Math.log10(raw));
-  // zkusí několik kroků a vybere nejužší osu, která má u krajních hodnot aspoň 5 % volného místa a 4–8 popisků
+  // zkusí několik kroků a vybere nejužší osu, která má u krajních hodnot aspoň 5 % volného místa a 4–9 popisků
   let best = null;
-  for (const e of [mag / 10, mag, mag * 10]) for (const q of [1, 2, 2.5, 5]) {
+  for (const e of [mag / 10, mag, mag * 10]) for (const q of (e >= 1 ? [1, 2, 5] : [1, 2, 2.5, 5])) { // krok 25, 250… se nepoužívá
     const step = q * e; if (step < raw / 3 || step > raw * 3) continue;
     let lo = Math.floor(mn / step + 1e-9) * step, hi = Math.ceil(mx / step - 1e-9) * step;
     for (let k = 0; k < 3; k++) {
@@ -772,9 +772,10 @@ function nice(mn, mx, zero, cap) {
     }
     if (cap != null) hi = Math.min(hi, cap);
     const nt = Math.round((hi - lo) / step) + 1;
-    if (nt < 4 || nt > 8) continue;
+    if (nt < 4 || nt > 9) continue;
     const r = hi - lo;
-    if (!best || r < best.r - 1e-9 || (Math.abs(r - best.r) < 1e-9 && step > best.step)) best = { lo, hi, step, r };
+    // při stejně široké ose vyhraje krok s počtem popisků nejblíž 6
+    if (!best || r < best.r - 1e-9 || (Math.abs(r - best.r) < 1e-9 && Math.abs(nt - 6) < Math.abs(best.nt - 6))) best = { lo, hi, step, r, nt };
   }
   if (!best) { // záloha: původní postup
     const step = [1, 2, 2.5, 5, 10].map(q => q * mag).find(q => q >= raw - 1e-12);
