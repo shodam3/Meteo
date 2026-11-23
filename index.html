@@ -35,6 +35,8 @@ h1{margin:0;font-size:22px;font-weight:700}
 .status.warn{color:var(--bad);font-weight:600}
 .chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
 .chips::-webkit-scrollbar{display:none}
+/* počítač s myší: tlačítka veličin zalomená do více řádků */
+@media (hover:hover) and (pointer:fine){.chips{flex-wrap:wrap;overflow-x:visible}}
 .chip{flex:none;height:36px;padding:0 14px;border-radius:18px;border:1px solid var(--line2);background:var(--card);font-size:14px;font-weight:500}
 .chip.on{background:var(--tx);border-color:var(--tx);color:#fff;font-weight:600}
 .seg{display:grid;gap:3px;background:var(--line);border-radius:12px;padding:3px}
@@ -223,6 +225,6 @@ legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bot
 </div>
 </div>
 
-<script src="app.js?v=40"></script>
+<script src="app.js?v=41"></script>
 </body>
 </html>
