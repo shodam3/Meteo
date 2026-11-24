@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 53;
+const APP_VERSION = 54;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -813,7 +813,7 @@ function drawChart(el, o) {
   const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
   // levý okraj jen tak široký, aby se vešly popisky osy
   const L = Math.max(20, Math.max(...sc.ticks.map(t => fmt(t, tdec).length)) * 5.6 + 6), R = 4, Bm = 22, n = o.n, slot = (W - L - R) / n;
-  let lab = null, T = 12, txt = null; const IR = o.icons || o.arrows ? (o.arrows && o.bft ? 29 : 18) : 0;
+  let lab = null, T = 12, txt = null; const IR = o.arrows ? (o.bft ? 29 : 18) : o.icons ? 22 : 0;
   if (o.type === 'bar' && o.series.length === 1) {
     txt = o.series[0].vals.map(v => v == null ? '' : fmt(v, o.dec));
     const tw = Math.max(...txt.map(t => t.length)) * 5.6;
@@ -849,7 +849,7 @@ function drawChart(el, o) {
     const lb = o.xLabel ? o.xLabel(i) : ''; if (lb) s += `<text x="${f1(o.xEdge ? L + slot * i : xc(i))}" y="${H - 6}" text-anchor="middle" font-size="11">${esc(lb)}</text>`;
   }
   s += '</g>';
-  if (o.icons && n === 24) o.icons.forEach((c, h) => { s += iconSvg(c, L + slot * (h + 0.5) - 7.5, T - IR + 1, 15); });
+  if (o.icons && n === 24) o.icons.forEach((c, h) => { s += iconSvg(c, L + slot * (h + 0.5) - 9.5, T - IR + 1, 19); });
   if (o.arrows && n === 24) o.arrows.forEach((a, h) => { s += arrowSvg(a, L + slot * (h + 0.5), T - IR + 8.5) + (o.bft ? bftSvg(a, L + slot * (h + 0.5), T - IR + 26) : ''); });
   const base = y(sc.lo);
   if (o.type === 'bar') {
@@ -984,7 +984,7 @@ function drawFine(el, o) {
   for (const f of o.fc || []) for (const p of f.pts) all.push(p[1]);
   if (!all.length) { el.innerHTML = `<div class="empty">${o.emptyMsg || 'Pro tento den nejsou žádná data.'}</div>`; return null; }
   let mn = all[0], mx = all[0]; for (const v of all) { if (v < mn) mn = v; if (v > mx) mx = v; }
-  const IR = o.icons || o.arrows ? (o.arrows && o.bft ? 29 : 18) : 0; T += IR;
+  const IR = o.arrows ? (o.bft ? 29 : 18) : o.icons ? 22 : 0; T += IR;
   const sc = nice(mn, mx, o.zero, o.cap), plotH = H - T - Bm;
   const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
   const L = Math.max(20, Math.max(...sc.ticks.map(t => fmt(t, tdec).length)) * 5.6 + 6), slot = (W - L - R) / 24;
@@ -1007,7 +1007,7 @@ function drawFine(el, o) {
     if (h % 3 === 0) s += `<text x="${f1(x(h * 60))}" y="${H - 6}" text-anchor="middle" font-size="11">${h}h</text>`;
   }
   s += '</g>';
-  if (o.icons) o.icons.forEach((c, h) => { s += iconSvg(c, L + slot * (h + 0.5) - 7.5, T - IR + 1, 15); });
+  if (o.icons) o.icons.forEach((c, h) => { s += iconSvg(c, L + slot * (h + 0.5) - 9.5, T - IR + 1, 19); });
   if (o.arrows) o.arrows.forEach((a, h) => { s += arrowSvg(a, L + slot * (h + 0.5), T - IR + 8.5) + (o.bft ? bftSvg(a, L + slot * (h + 0.5), T - IR + 26) : ''); });
   if (o.now != null) s += `<line x1="${f1(x(o.now))}" y1="${T}" x2="${f1(x(o.now))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.45"/>`;
   for (const f of o.fc || []) s += `<path d="${monoPath(px(f.pts))}" fill="none" stroke="${f.color}" stroke-opacity="0.9" stroke-width="1.5" stroke-dasharray="4 3"/>`;
