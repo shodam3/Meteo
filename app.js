@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 55;
+const APP_VERSION = 56;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -984,7 +984,7 @@ function drawFine(el, o) {
   for (const f of o.fc || []) for (const p of f.pts) all.push(p[1]);
   if (!all.length) { el.innerHTML = `<div class="empty">${o.emptyMsg || 'Pro tento den nejsou žádná data.'}</div>`; return null; }
   let mn = all[0], mx = all[0]; for (const v of all) { if (v < mn) mn = v; if (v > mx) mx = v; }
-  const ISZ = (W - 40) / 24 >= 18 ? 19 : 15, IR = o.arrows ? (o.bft ? 29 : 18) : o.icons ? ISZ + 3 : 0; // větší ikony jen na širokém displeji T += IR;
+  const ISZ = (W - 40) / 24 >= 18 ? 19 : 15, IR = o.arrows ? (o.bft ? 29 : 18) : o.icons ? ISZ + 3 : 0; T += IR; // větší ikony jen na širokém displeji
   const sc = nice(mn, mx, o.zero, o.cap), plotH = H - T - Bm;
   const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
   const L = Math.max(20, Math.max(...sc.ticks.map(t => fmt(t, tdec).length)) * 5.6 + 6), slot = (W - L - R) / 24;
