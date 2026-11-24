@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 52;
+const APP_VERSION = 53;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -540,8 +540,8 @@ function windRow() {
       const a = acc[Math.floor(t / 60)], w = sp != null ? Math.max(sp, 0.1) : 1;
       a.x += Math.sin(dir * Math.PI / 180) * w; a.y += Math.cos(dir * Math.PI / 180) * w; a.sp += sp || 0; a.n++;
     });
-    acc.forEach((a, h) => { if (a.n) row[h] = { deg: (Math.atan2(a.x, a.y) * 180 / Math.PI + 360) % 360, calm: a.sp / a.n < 1 }; });
-  } else if (model.A) for (const r of model.A.h || []) if (r.d === d && r.dir != null) row[r.h] = { deg: r.dir, calm: r.wind && r.wind[2] != null && r.wind[2] < 1 };
+    acc.forEach((a, h) => { if (a.n) row[h] = { deg: (Math.atan2(a.x, a.y) * 180 / Math.PI + 360) % 360, calm: a.sp / a.n < 1, bf: beaufort(a.sp / a.n) }; });
+  } else if (model.A) for (const r of model.A.h || []) if (r.d === d && r.dir != null) { const av = r.wind ? r.wind[2] : null; row[r.h] = { deg: r.dir, calm: av != null && av < 1, bf: beaufort(av) }; }
   const dd = dayDiff(today(), st.anchor), nowH = new Date().getHours();
   if (model.windFc && model.windFc.rows && dd >= 0) {
     const mp = new Map(model.windFc.rows.filter(x => x[0] === d).map(x => [x[1], x]));
@@ -552,6 +552,10 @@ function windRow() {
   }
   return row.some(Boolean) ? row : null;
 }
+// stupeň Beaufortovy stupnice z průměrné rychlosti větru v km/h (meze podle WMO v m/s)
+const BFT = [0.3, 1.6, 3.4, 5.5, 8.0, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7];
+function beaufort(kmh) { if (kmh == null) return null; const ms = kmh / 3.6; let b = 0; while (b < 12 && ms >= BFT[b]) b++; return b; }
+const bftSvg = (a, cx, cy) => a && a.bf != null ? `<text x="${Math.round(cx * 10) / 10}" y="${cy}" text-anchor="middle" font-size="9" font-weight="600" fill="#4B5563">${a.bf}</text>` : '';
 // šipka míří tam, kam vítr fouká (směr větru udává, odkud fouká)
 function arrowSvg(a, cx, cy) {
   const f1 = v => Math.round(v * 10) / 10;
@@ -809,7 +813,7 @@ function drawChart(el, o) {
   const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
   // levý okraj jen tak široký, aby se vešly popisky osy
   const L = Math.max(20, Math.max(...sc.ticks.map(t => fmt(t, tdec).length)) * 5.6 + 6), R = 4, Bm = 22, n = o.n, slot = (W - L - R) / n;
-  let lab = null, T = 12, txt = null; const IR = o.icons || o.arrows ? 18 : 0;
+  let lab = null, T = 12, txt = null; const IR = o.icons || o.arrows ? (o.arrows && o.bft ? 29 : 18) : 0;
   if (o.type === 'bar' && o.series.length === 1) {
     txt = o.series[0].vals.map(v => v == null ? '' : fmt(v, o.dec));
     const tw = Math.max(...txt.map(t => t.length)) * 5.6;
@@ -846,7 +850,7 @@ function drawChart(el, o) {
   }
   s += '</g>';
   if (o.icons && n === 24) o.icons.forEach((c, h) => { s += iconSvg(c, L + slot * (h + 0.5) - 7.5, T - IR + 1, 15); });
-  if (o.arrows && n === 24) o.arrows.forEach((a, h) => { s += arrowSvg(a, L + slot * (h + 0.5), T - IR + 8.5); });
+  if (o.arrows && n === 24) o.arrows.forEach((a, h) => { s += arrowSvg(a, L + slot * (h + 0.5), T - IR + 8.5) + (o.bft ? bftSvg(a, L + slot * (h + 0.5), T - IR + 26) : ''); });
   const base = y(sc.lo);
   if (o.type === 'bar') {
     const two = o.series.length > 1, w = Math.max(1, slot * (two ? 0.4 : 0.78));
@@ -980,7 +984,7 @@ function drawFine(el, o) {
   for (const f of o.fc || []) for (const p of f.pts) all.push(p[1]);
   if (!all.length) { el.innerHTML = `<div class="empty">${o.emptyMsg || 'Pro tento den nejsou žádná data.'}</div>`; return null; }
   let mn = all[0], mx = all[0]; for (const v of all) { if (v < mn) mn = v; if (v > mx) mx = v; }
-  const IR = o.icons || o.arrows ? 18 : 0; T += IR;
+  const IR = o.icons || o.arrows ? (o.arrows && o.bft ? 29 : 18) : 0; T += IR;
   const sc = nice(mn, mx, o.zero, o.cap), plotH = H - T - Bm;
   const tdec = sc.step < 1 ? (sc.step < 0.1 ? 2 : 1) : (sc.step % 1 ? 1 : 0);
   const L = Math.max(20, Math.max(...sc.ticks.map(t => fmt(t, tdec).length)) * 5.6 + 6), slot = (W - L - R) / 24;
@@ -1004,7 +1008,7 @@ function drawFine(el, o) {
   }
   s += '</g>';
   if (o.icons) o.icons.forEach((c, h) => { s += iconSvg(c, L + slot * (h + 0.5) - 7.5, T - IR + 1, 15); });
-  if (o.arrows) o.arrows.forEach((a, h) => { s += arrowSvg(a, L + slot * (h + 0.5), T - IR + 8.5); });
+  if (o.arrows) o.arrows.forEach((a, h) => { s += arrowSvg(a, L + slot * (h + 0.5), T - IR + 8.5) + (o.bft ? bftSvg(a, L + slot * (h + 0.5), T - IR + 26) : ''); });
   if (o.now != null) s += `<line x1="${f1(x(o.now))}" y1="${T}" x2="${f1(x(o.now))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.45"/>`;
   for (const f of o.fc || []) s += `<path d="${monoPath(px(f.pts))}" fill="none" stroke="${f.color}" stroke-opacity="0.9" stroke-width="1.5" stroke-dasharray="4 3"/>`;
   if (o.b) for (const sg of segments(o.b)) s += `<path d="${monoPath(px(sg))}" fill="none" stroke="#C2410C" stroke-opacity="0.85" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
@@ -1173,7 +1177,7 @@ function chartOpts(a, b) {
   const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' && st.scale !== 'week' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
   if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
   const wv = st.v === 'wind' || st.v === 'gust';
-  const o = { type, n, series, icons: st.scale === 'day' && !b && !wv ? iconRow() : null, arrows: st.scale === 'day' && !b && wv ? windRow() : null, thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+  const o = { type, n, series, icons: st.scale === 'day' && !b && !wv ? iconRow() : null, arrows: st.scale === 'day' && !b && wv ? windRow() : null, bft: st.v === 'wind', thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
   if (!b && type === 'line') { o.area = st.scale === 'week'; o.tempColor = st.v === 'temp'; }
   const cutAB = b ? Math.min(elapsedCut(model.A.p), elapsedCut(model.B.p)) : Infinity;
   if (b && isFinite(cutAB)) { const lb = b.Bk.length > a.Bk.length ? [b.Bk, model.B.p] : [a.Bk, model.A.p]; o.dimFrom = cutIndex(lb[0], lb[1], cutAB); }
@@ -1193,7 +1197,7 @@ function chartOpts(a, b) {
     };
     const isT = dayDiff(today(), st.anchor) === 0;
     const isWind = st.v === 'wind' || st.v === 'gust';
-    const fo = { fine: true, icons: isWind ? null : iconRow(), arrows: isWind ? windRow() : null, thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, a: toPts(model.A, isT), b: b ? toPts(model.B, false) : null, zero: !!V.zero, dec: V.dec, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+    const fo = { fine: true, icons: isWind ? null : iconRow(), arrows: isWind ? windRow() : null, bft: st.v === 'wind', thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, a: toPts(model.A, isT), b: b ? toPts(model.B, false) : null, zero: !!V.zero, dec: V.dec, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
     if (b && isFinite(cutAB) && cutAB < 24) fo.dimFromMin = cutAB * 60;
     if (fcApplicable()) fo.fc = fcFine(model.fc || {}, ymd(st.anchor), st.v);
     if (isT && !b) { const nw = new Date(); fo.now = nw.getHours() * 60 + nw.getMinutes(); }
