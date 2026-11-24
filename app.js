@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 51;
+const APP_VERSION = 52;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -813,11 +813,19 @@ function drawChart(el, o) {
   if (o.type === 'bar' && o.series.length === 1) {
     txt = o.series[0].vals.map(v => v == null ? '' : fmt(v, o.dec));
     const tw = Math.max(...txt.map(t => t.length)) * 5.6;
-    if (slot >= tw + 2) { lab = 'h'; T = 20; } else if (slot >= 9.5) { lab = 'r'; T = 14 + tw; }
+    if (slot >= tw + 2) lab = 'h'; else if (slot >= 9.5) lab = 'r';
   }
   T += IR;
   const plotH = H - T - Bm;
   const y = v => T + (sc.hi - v) / (sc.hi - sc.lo) * plotH;
+  // u sloupců s popisky se osa nahoře prodlužuje o celé dílky, dokud se nad nejvyšší sloupec nevejde jeho hodnota
+  if (lab) for (let k = 0; k < 12; k++) {
+    const vals = o.series[0].vals;
+    const fits = vals.every((v, i) => v == null || Number(v.toFixed(o.dec)) === 0 || Math.min(y(v), y(sc.lo) - 1) - 3 - (lab === 'h' ? 9 : txt[i].length * 5.4) >= T);
+    if (fits) break;
+    sc.hi += sc.step;
+    if (o.cap == null || sc.hi <= o.cap) sc.ticks.push(Math.round(sc.hi / sc.step) * sc.step);
+  }
   const xc = i => L + slot * (i + 0.5);
   const f1 = x => Math.round(x * 10) / 10;
   let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.aria || 'Graf')}">`;
