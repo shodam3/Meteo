@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 56;
+const APP_VERSION = 57;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1151,11 +1151,7 @@ function liveHour(a) {
   if (dayDiff(today(), st.anchor) !== 0 || !model.A.fine) return;
   const F = model.A.fine, vv = F.v[st.v] || [], pts = [];
   F.t.forEach((t, i) => { if (vv[i] != null) pts.push([t, vv[i]]); });
-  if (cur && String(cur.obsTimeLocal || '').startsWith(ymd(today()))) {
-    const m = cur.metric || {}, cv = num({ temp: m.temp, dew: m.dewpt, hum: cur.humidity, press: m.pressure, wind: m.windSpeed, gust: m.windGust, solar: cur.solarRadiation, uv: cur.uv, rain: m.precipTotal }[st.v]);
-    const ct = String(cur.obsTimeLocal).slice(11, 16).split(':').map(Number), mi = ct[0] * 60 + ct[1];
-    if (cv != null && (!pts.length || mi > pts[pts.length - 1][0])) pts.push([mi, cv]);
-  }
+  // probíhající hodina se počítá jen z pětiminutových dat, bez okamžitého měření
   if (!pts.length) return;
   const h = Math.floor(pts[pts.length - 1][0] / 60), inH = pts.filter(p => Math.floor(p[0] / 60) === h);
   if (!inH.length || !a.vals[h]) return;
