@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 62;
+const APP_VERSION = 63;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -180,17 +180,31 @@ async function ecoPatch(h, d) {
   if (!ecoReady()) return;
   const days = [...new Set([...h, ...d].map(r => r.d))].filter(x => x >= cfg.ecoFrom && x <= ymd(today()));
   for (const day of days) {
-    // od začátku Ecowittu se tlak z WU nepoužívá vůbec; když Ecowitt data nemá, tlak chybí
+    // od začátku Ecowittu se tlak z WU nepoužívá; jen v první den zůstává tlak z WU do prvního měření z Ecowittu
     const eco = await ecoDay(day), none = [null, null, null];
-    for (const r of h) if (r.d === day) r.press = (eco && ecoAgg(eco, r.h)) || none;
-    for (const r of d) if (r.d === day) r.press = (eco && ecoAgg(eco)) || none;
+    const cutH = day === cfg.ecoFrom ? (eco && eco.t.length ? Math.floor(eco.t[0] / 60) : 24) : 0;
+    const wuH = h.filter(r => r.d === day && r.h < cutH && r.press && r.press[0] != null);
+    for (const r of h) if (r.d === day && r.h >= cutH) r.press = (eco && ecoAgg(eco, r.h)) || none;
+    for (const r of d) if (r.d === day) {
+      if (cutH >= 24) continue;
+      const e = eco && ecoAgg(eco);
+      if (!cutH) { r.press = e || none; continue; }
+      if (!wuH.length) { if (e) r.press = e; continue; }
+      const his = wuH.map(x => x.press[0]).concat(e ? [e[0]] : []), los = wuH.map(x => x.press[1]).concat(e ? [e[1]] : []);
+      const avs = wuH.map(x => x.press[2]).concat(e ? eco.p : []);
+      r.press = [Math.max(...his), Math.min(...los), r2(avs.reduce((a, b) => a + b, 0) / avs.length)];
+    }
   }
 }
 // v podrobných datech dne nahradí tlak hodnotou z Ecowittu (nejbližší měření do 6 minut)
 async function ecoFine(d, res) {
   if (!res || !res.fine || !ecoReady() || d < cfg.ecoFrom) return res;
-  // tlak má vlastní časovou řadu jen z Ecowittu (bez tlaku z WU)
-  const eco = await ecoDay(d), tp = eco ? eco.t.slice() : [], pp = eco ? eco.p.slice() : [];
+  // tlak má vlastní časovou řadu z Ecowittu; jen v první den se před prvním měřením z Ecowittu ponechá tlak z WU
+  const eco = await ecoDay(d);
+  if (d === cfg.ecoFrom && !(eco && eco.t.length)) return res;
+  const tp = [], pp = [];
+  if (d === cfg.ecoFrom) res.fine.t.forEach((t, i) => { if (t < eco.t[0] && res.fine.v.press[i] != null) { tp.push(t); pp.push(res.fine.v.press[i]); } });
+  if (eco) { tp.push(...eco.t); pp.push(...eco.p); }
   let x = null; tp.forEach((t, i) => { const v = pp[i], hm = Math.floor(t / 60) + ':' + pad(t % 60); if (!x) x = { hi: v, hiT: hm, lo: v, loT: hm }; if (v > x.hi) { x.hi = v; x.hiT = hm; } if (v < x.lo) { x.lo = v; x.loT = hm; } });
   const ext = { ...(res.ext || {}) }; if (x) ext.press = x; else delete ext.press;
   return { ...res, fine: { ...res.fine, tp, v: { ...res.fine.v, press: pp } }, ext };
