@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 58;
+const APP_VERSION = 59;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -94,7 +94,8 @@ const idb = {
   },
   async get(k) { const db = await this.open(); if (!db) return this.mem.get(k); return this.tx('readonly', s => s.get(k)); },
   async set(k, v) { const db = await this.open(); if (!db) { this.mem.set(k, v); return; } return this.tx('readwrite', s => s.put(v, k)); },
-  async clear() { const db = await this.open(); this.mem.clear(); if (db) return this.tx('readwrite', s => s.clear()); }
+  async clear() { const db = await this.open(); this.mem.clear(); if (db) return this.tx('readwrite', s => s.clear()); },
+  async del(k) { const db = await this.open(); this.mem.delete(k); if (db) return this.tx('readwrite', s => s.delete(k)); }
 };
 
 // ---------- hlášky ----------
@@ -122,6 +123,31 @@ async function limiter() {
   if (q.n >= 1400) throw new Error('Dnes už aplikace vyčerpala bezpečný počet dotazů na Weather Underground (1400). Zítra to bude opět v pořádku.');
   q.n++; LS.set('meteo.quota', q); lim.ts.push(Date.now());
 }
+// ---------- ruční opravy dat (soubor opravy.json v úložišti dat) ----------
+// srazky: [{ den: 'RRRR-MM-DD', od: 'HH:MM', mm: 0.3, pozn }] – od daného času se z denního úhrnu odečte mm (nejméně na 0)
+let opravy = LS.get('meteo.opravy', { srazky: [] });
+function opravSrazky(list) {
+  const os = opravy && opravy.srazky; if (!os || !os.length || !Array.isArray(list)) return list;
+  for (const o of list) {
+    const t = String(o.obsTimeLocal || ''), m = o.metric; if (!m || m.precipTotal == null) continue;
+    const den = t.slice(0, 10), cas = t.slice(11, 16) || '23:59';
+    let sub = 0; for (const k of os) if (k.den === den && cas >= (k.od || '00:00')) sub += k.mm;
+    if (sub) m.precipTotal = Math.max(0, Math.round((m.precipTotal - sub) * 100) / 100);
+  }
+  return list;
+}
+async function nactiOpravy() {
+  if (!gh.ready()) return;
+  try {
+    const o = await gh.getFile('opravy.json'); if (!o) return;
+    const novy = JSON.stringify(o), stary = JSON.stringify(opravy);
+    if (novy === stary) return;
+    // dotčené dny a měsíce se musí znovu načíst z WU, aby se oprava projevila
+    const dny = new Set([...(o.srazky || []), ...((opravy && opravy.srazky) || [])].map(k => k.den));
+    for (const d of dny) { await idb.del('day5d/' + d); await idb.del('hourly/' + d.slice(0, 7)); await idb.del('daily/' + d.slice(0, 7)); }
+    opravy = o; LS.set('meteo.opravy', o); LS.set('meteo.opravyTs', Date.now());
+  } catch (err) { note('Opravy dat: ' + err.message); }
+}
 async function wuGet(path, params = {}) {
   if (!cfg.station || !cfg.wuKey) throw new Error('Nejprve v nastavení zadejte ID stanice a přístupový klíč k Weather Underground.');
   await limiter();
@@ -141,7 +167,7 @@ async function wuGet(path, params = {}) {
   }
   const t = await r.text(); if (!t.trim()) return [];
   const j = JSON.parse(t);
-  return j.observations || j.summaries || [];
+  return opravSrazky(j.observations || j.summaries || []);
 }
 
 // převod záznamu z WU do vlastního tvaru
@@ -319,7 +345,9 @@ async function loadMonth(kind, ymStr) {
   if (!e && gh.ready()) {
     try {
       const g = await gh.getFile(ghPath(kind, ymStr));
-      if (g && Array.isArray(g.records)) {
+      // kopie z GitHubu starší než změna oprav pro tento měsíc se nepoužije, měsíc se stáhne znovu z WU
+      const opTs = LS.get('meteo.opravyTs', 0), dotcen = ((opravy && opravy.srazky) || []).some(k => k.den.startsWith(ymStr));
+      if (g && Array.isArray(g.records) && !(dotcen && (g.fetchedAt || 0) < opTs)) {
         g.ghDone = !!g.final; await idb.set(key, g); e = g;
         if (fresh(g)) return g.records;
       }
@@ -1653,6 +1681,7 @@ function start() {
     $('btnSettings').click(); return;
   }
   renderStatus();
-  lastTick = Date.now(); diag('otevření aplikace'); loadCurrent(); refresh();
+  lastTick = Date.now(); diag('otevření aplikace');
+  Promise.race([nactiOpravy(), new Promise(r => setTimeout(r, 4000))]).finally(() => { loadCurrent(); refresh(); });
 }
 if (typeof window !== 'undefined' && !window.__METEO_TEST__) start();
