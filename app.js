@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 61;
+const APP_VERSION = 62;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -129,7 +129,10 @@ const ecoReady = () => !!(cfg.ecoApp && cfg.ecoKey && cfg.ecoMac);
 async function ecoGet(path, params = {}) {
   const q = new URLSearchParams({ application_key: cfg.ecoApp, api_key: cfg.ecoKey, mac: cfg.ecoMac, temp_unitid: 1, pressure_unitid: 3, ...params });
   let r;
-  try { r = await fetch(ECO + path + '?' + q, { cache: 'no-store' }); } catch { throw new Error('Nepodařilo se spojit s Ecowitt.'); }
+  const ac = new AbortController(), to = setTimeout(() => ac.abort(), 15000);
+  try { r = await fetch(ECO + path + '?' + q, { cache: 'no-store', signal: ac.signal }); }
+  catch { throw new Error(ac.signal.aborted ? 'Ecowitt neodpověděl do 15 s.' : 'Nepodařilo se spojit s Ecowitt.'); }
+  finally { clearTimeout(to); }
   if (!r.ok) throw new Error('Ecowitt vrátil chybu ' + r.status);
   const j = await r.json();
   if (j.code !== 0) throw new Error('Ecowitt: ' + (j.msg || 'chyba ' + j.code));
@@ -177,19 +180,20 @@ async function ecoPatch(h, d) {
   if (!ecoReady()) return;
   const days = [...new Set([...h, ...d].map(r => r.d))].filter(x => x >= cfg.ecoFrom && x <= ymd(today()));
   for (const day of days) {
-    const eco = await ecoDay(day); if (!eco || !eco.p.length) continue;
-    for (const r of h) if (r.d === day) { const a = ecoAgg(eco, r.h); if (a) r.press = a; }
-    for (const r of d) if (r.d === day) { const a = ecoAgg(eco); if (a) r.press = a; }
+    // od začátku Ecowittu se tlak z WU nepoužívá vůbec; když Ecowitt data nemá, tlak chybí
+    const eco = await ecoDay(day), none = [null, null, null];
+    for (const r of h) if (r.d === day) r.press = (eco && ecoAgg(eco, r.h)) || none;
+    for (const r of d) if (r.d === day) r.press = (eco && ecoAgg(eco)) || none;
   }
 }
 // v podrobných datech dne nahradí tlak hodnotou z Ecowittu (nejbližší měření do 6 minut)
 async function ecoFine(d, res) {
-  if (!res || !res.fine || !ecoReady()) return res;
-  const eco = await ecoDay(d); if (!eco || !eco.p.length) return res;
-  const near = mi => { let b = null, bd = 7; eco.t.forEach((t, i) => { const dd = Math.abs(t - mi); if (dd < bd) { bd = dd; b = eco.p[i]; } }); return b; };
-  const press = res.fine.t.map((mi, i) => near(mi) ?? res.fine.v.press[i]);
-  let x = null; eco.t.forEach((t, i) => { const v = eco.p[i], hm = Math.floor(t / 60) + ':' + pad(t % 60); if (!x) x = { hi: v, hiT: hm, lo: v, loT: hm }; if (v > x.hi) { x.hi = v; x.hiT = hm; } if (v < x.lo) { x.lo = v; x.loT = hm; } });
-  return { ...res, fine: { ...res.fine, v: { ...res.fine.v, press } }, ext: { ...(res.ext || {}), press: x } };
+  if (!res || !res.fine || !ecoReady() || d < cfg.ecoFrom) return res;
+  // tlak má vlastní časovou řadu jen z Ecowittu (bez tlaku z WU)
+  const eco = await ecoDay(d), tp = eco ? eco.t.slice() : [], pp = eco ? eco.p.slice() : [];
+  let x = null; tp.forEach((t, i) => { const v = pp[i], hm = Math.floor(t / 60) + ':' + pad(t % 60); if (!x) x = { hi: v, hiT: hm, lo: v, loT: hm }; if (v > x.hi) { x.hi = v; x.hiT = hm; } if (v < x.lo) { x.lo = v; x.loT = hm; } });
+  const ext = { ...(res.ext || {}) }; if (x) ext.press = x; else delete ext.press;
+  return { ...res, fine: { ...res.fine, tp, v: { ...res.fine.v, press: pp } }, ext };
 }
 
 // ---------- ruční opravy dat (soubor opravy.json v úložišti dat) ----------
@@ -1236,7 +1240,7 @@ function extraVals(a, b) {
 function fineHours(X, src) {
   if (!src || !src.fine) return;
   const vv = src.fine.v[st.v] || [], by = Array.from({ length: 24 }, () => []);
-  src.fine.t.forEach((t, i) => { if (vv[i] != null) by[Math.floor(t / 60)].push(vv[i]); });
+  ((st.v === 'press' && src.fine.tp) || src.fine.t).forEach((t, i) => { if (vv[i] != null) by[Math.floor(t / 60)].push(vv[i]); });
   const mode = curMode();
   by.forEach((xs, h) => {
     if (!xs.length || !X.vals[h]) return;
@@ -1248,7 +1252,7 @@ function fineHours(X, src) {
 function liveHour(a) {
   if (dayDiff(today(), st.anchor) !== 0 || !model.A.fine) return;
   const F = model.A.fine, vv = F.v[st.v] || [], pts = [];
-  F.t.forEach((t, i) => { if (vv[i] != null) pts.push([t, vv[i]]); });
+  ((st.v === 'press' && F.tp) || F.t).forEach((t, i) => { if (vv[i] != null) pts.push([t, vv[i]]); });
   // probíhající hodina se počítá jen z pětiminutových dat, bez okamžitého měření
   if (!pts.length) return;
   const h = Math.floor(pts[pts.length - 1][0] / 60), inH = pts.filter(p => Math.floor(p[0] / 60) === h);
@@ -1281,7 +1285,7 @@ function chartOpts(a, b) {
     const toPts = (X, isToday) => {
       if (!X || !X.fine) return null;
       const vv = X.fine.v[st.v] || [], pts = [];
-      X.fine.t.forEach((t, i) => { if (vv[i] != null) pts.push([t, vv[i]]); });
+      ((st.v === 'press' && X.fine.tp) || X.fine.t).forEach((t, i) => { if (vv[i] != null) pts.push([t, vv[i]]); });
       if (isToday && cur && String(cur.obsTimeLocal || '').startsWith(ymd(today()))) {
         const m = cur.metric || {}, cv = num({ temp: m.temp, dew: m.dewpt, hum: cur.humidity, press: m.pressure, wind: m.windSpeed, gust: m.windGust, solar: cur.solarRadiation, uv: cur.uv, rain: m.precipTotal }[st.v]);
         const ct = String(cur.obsTimeLocal).slice(11, 16).split(':').map(Number), mi = ct[0] * 60 + ct[1];
@@ -1491,12 +1495,16 @@ async function loadCurrent() {
   try {
     const o = (await wuGet('observations/current'))[0];
     if (o) {
-      if (ecoReady()) try {
-        const x = await ecoGet('real_time', { call_back: 'outdoor,pressure' });
-        const v = mslp(ecoVal(x.pressure && x.pressure.absolute), ecoVal(x.outdoor && x.outdoor.temperature), ecoVal(x.outdoor && x.outdoor.humidity));
-        if (v != null) { o.metric = o.metric || {}; o.metric.pressure = v; }
-      } catch (err) { note('Tlak z Ecowittu: ' + err.message); }
+      if (ecoReady()) {
+        o.metric = o.metric || {}; o.metric.pressure = null;
+        try {
+          const x = await ecoGet('real_time', { call_back: 'outdoor,pressure' });
+          o.metric.pressure = mslp(ecoVal(x.pressure && x.pressure.absolute), ecoVal(x.outdoor && x.outdoor.temperature), ecoVal(x.outdoor && x.outdoor.humidity));
+        } catch (err) { note('Tlak z Ecowittu: ' + err.message); }
+      }
       cur = o; renderCurrent();
+      // konec křivky dneška se posune k novému okamžitému měření
+      if (model && st.scale === 'day' && !st.cmp && dayDiff(today(), st.anchor) === 0) draw();
       if (setCoords(o) && st.scale === 'day') refresh();
     }
   }
