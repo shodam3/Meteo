@@ -195,6 +195,14 @@ legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bot
 <label>Přístupový klíč (API Key)<small>wunderground.com → účet → API Keys</small><span class="keyrow"><input type="password" id="fWuKey" autocomplete="off" spellcheck="false"><button type="button" class="btn" data-copy="fWuKey">Kopírovat</button></span></label>
 </fieldset>
 <fieldset>
+<legend>Ecowitt – tlak (nepovinné)</legend>
+<p class="note" style="margin:0">Z absolutního tlaku na Ecowitt.net aplikace spočítá tlak přepočtený na hladinu moře (podle výšky, teploty a vlhkosti). Klíče najdete na ecowitt.net → ikona účtu vpravo nahoře.</p>
+<label>Application Key<span class="keyrow"><input type="password" id="fEcoApp" autocomplete="off" spellcheck="false"><button type="button" class="btn" data-copy="fEcoApp">Kopírovat</button></span></label>
+<label>API Key<span class="keyrow"><input type="password" id="fEcoKey" autocomplete="off" spellcheck="false"><button type="button" class="btn" data-copy="fEcoKey">Kopírovat</button></span></label>
+<label>MAC adresa stanice<small>Tvar XX:XX:XX:XX:XX:XX, najdete ji ve WS View nebo na ecowitt.net.</small><input type="text" id="fEcoMac" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
+<label>Nadmořská výška tlakoměru (m)<input type="text" id="fEcoAlt" inputmode="decimal" autocomplete="off"></label>
+</fieldset>
+<fieldset>
 <legend>Ukládání na GitHub (nepovinné)</legend>
 <label>Soukromý repozitář pro data<input type="text" id="fRepo" autocomplete="off" spellcheck="false" placeholder="meteo-data"></label>
 <label>Přístupový klíč GitHubu<small>Fine-grained token jen pro tento repozitář, oprávnění Contents: Read and write.</small><span class="keyrow"><input type="password" id="fGhToken" autocomplete="off" spellcheck="false" placeholder="github_pat_…"><button type="button" class="btn" data-copy="fGhToken">Kopírovat</button></span></label>
@@ -225,6 +233,6 @@ legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bot
 </div>
 </div>
 
-<script src="app.js?v=60"></script>
+<script src="app.js?v=61"></script>
 </body>
 </html>

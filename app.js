@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 60;
+const APP_VERSION = 61;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -51,7 +51,7 @@ const VARS = {
 };
 
 // ---------- nastavení a stav ----------
-let cfg = Object.assign({ station: '', wuKey: '', ghToken: '', ghRepo: 'meteo-data', ghOwner: '' }, LS.get('meteo.cfg', {}));
+let cfg = Object.assign({ station: '', wuKey: '', ghToken: '', ghRepo: 'meteo-data', ghOwner: '', ecoApp: '', ecoKey: '', ecoMac: '', ecoAlt: 500, ecoFrom: '2026-11-26' }, LS.get('meteo.cfg', {}));
 const saved = LS.get('meteo.view', {});
 const st = {
   scale: ['day', 'week', 'month', 'year'].includes(saved.scale) ? saved.scale : 'week',
@@ -123,6 +123,75 @@ async function limiter() {
   if (q.n >= 1400) throw new Error('Dnes už aplikace vyčerpala bezpečný počet dotazů na Weather Underground (1400). Zítra to bude opět v pořádku.');
   q.n++; LS.set('meteo.quota', q); lim.ts.push(Date.now());
 }
+// ---------- Ecowitt: absolutní tlak, z něj tlak přepočtený na hladinu moře ----------
+const ECO = 'https://api.ecowitt.net/api/v3/device/';
+const ecoReady = () => !!(cfg.ecoApp && cfg.ecoKey && cfg.ecoMac);
+async function ecoGet(path, params = {}) {
+  const q = new URLSearchParams({ application_key: cfg.ecoApp, api_key: cfg.ecoKey, mac: cfg.ecoMac, temp_unitid: 1, pressure_unitid: 3, ...params });
+  let r;
+  try { r = await fetch(ECO + path + '?' + q, { cache: 'no-store' }); } catch { throw new Error('Nepodařilo se spojit s Ecowitt.'); }
+  if (!r.ok) throw new Error('Ecowitt vrátil chybu ' + r.status);
+  const j = await r.json();
+  if (j.code !== 0) throw new Error('Ecowitt: ' + (j.msg || 'chyba ' + j.code));
+  return j.data || {};
+}
+// přepočet na hladinu moře podle DWD: výška stanice, teplota a vlhkost vzduchu
+function mslp(pAbs, t, rh) {
+  if (pAbs == null) return null;
+  const h = Number(cfg.ecoAlt) || 0, tc = t == null ? 10 : t;
+  const E = rh == null ? 0 : 6.112 * Math.exp(17.62 * tc / (243.12 + tc)) * rh / 100;
+  return Math.round(pAbs * Math.exp(9.80665 * h / (287.05 * (tc + 273.15 + 0.12 * E + 0.0065 * h / 2))) * 10) / 10;
+}
+const ecoVal = x => x == null ? null : num(x.value);
+// pětiminutový tlak z Ecowittu za jeden den: minuty od půlnoci a přepočtený tlak
+const ecoInflight = new Map();
+function ecoDay(d) {
+  if (!ecoReady() || d < cfg.ecoFrom || d > ymd(today())) return Promise.resolve(null);
+  if (ecoInflight.has(d)) return ecoInflight.get(d);
+  const p = (async () => {
+    const key = 'eco5/' + d, e = await idb.get(key), isToday = d === ymd(today());
+    if (e && (e.final || Date.now() - e.fetchedAt < (isToday ? 4 * 60e3 : STALE))) return e;
+    try {
+      const x = await ecoGet('history', { start_date: d + ' 00:00:00', end_date: d + ' 23:59:59', cycle_type: '5min', call_back: 'outdoor,pressure' });
+      const L = o => (o && o.list) || {}, pa = L(x.pressure && x.pressure.absolute), te = L(x.outdoor && x.outdoor.temperature), hu = L(x.outdoor && x.outdoor.humidity);
+      const out = { t: [], p: [] };
+      for (const ts of Object.keys(pa).sort((a, b) => a - b)) {
+        const dt = new Date(Number(ts) * 1000); if (ymd(dt) !== d) continue;
+        const v = mslp(num(pa[ts]), num(te[ts]), num(hu[ts])); if (v == null) continue;
+        out.t.push(dt.getHours() * 60 + dt.getMinutes()); out.p.push(v);
+      }
+      const res = { ...out, final: Date.now() > addDays(parseYmd(d), 1).getTime() + 3600e3, fetchedAt: Date.now() };
+      await idb.set(key, res); return res;
+    } catch (err) { note('Tlak z Ecowittu: ' + err.message); return e || null; }
+  })().finally(() => ecoInflight.delete(d));
+  ecoInflight.set(d, p); return p;
+}
+// souhrn tlaku z Ecowittu po hodinách nebo za celý den: [max, min, průměr]
+function ecoAgg(eco, h) {
+  const xs = eco.p.filter((v, i) => h == null || Math.floor(eco.t[i] / 60) === h);
+  if (!xs.length) return null;
+  return [Math.max(...xs), Math.min(...xs), r2(xs.reduce((a, b) => a + b, 0) / xs.length)];
+}
+// tlak v hodinových a denních záznamech nahradí přepočtem z Ecowittu
+async function ecoPatch(h, d) {
+  if (!ecoReady()) return;
+  const days = [...new Set([...h, ...d].map(r => r.d))].filter(x => x >= cfg.ecoFrom && x <= ymd(today()));
+  for (const day of days) {
+    const eco = await ecoDay(day); if (!eco || !eco.p.length) continue;
+    for (const r of h) if (r.d === day) { const a = ecoAgg(eco, r.h); if (a) r.press = a; }
+    for (const r of d) if (r.d === day) { const a = ecoAgg(eco); if (a) r.press = a; }
+  }
+}
+// v podrobných datech dne nahradí tlak hodnotou z Ecowittu (nejbližší měření do 6 minut)
+async function ecoFine(d, res) {
+  if (!res || !res.fine || !ecoReady()) return res;
+  const eco = await ecoDay(d); if (!eco || !eco.p.length) return res;
+  const near = mi => { let b = null, bd = 7; eco.t.forEach((t, i) => { const dd = Math.abs(t - mi); if (dd < bd) { bd = dd; b = eco.p[i]; } }); return b; };
+  const press = res.fine.t.map((mi, i) => near(mi) ?? res.fine.v.press[i]);
+  let x = null; eco.t.forEach((t, i) => { const v = eco.p[i], hm = Math.floor(t / 60) + ':' + pad(t % 60); if (!x) x = { hi: v, hiT: hm, lo: v, loT: hm }; if (v > x.hi) { x.hi = v; x.hiT = hm; } if (v < x.lo) { x.lo = v; x.loT = hm; } });
+  return { ...res, fine: { ...res.fine, v: { ...res.fine.v, press } }, ext: { ...(res.ext || {}), press: x } };
+}
+
 // ---------- ruční opravy dat (soubor opravy.json v úložišti dat) ----------
 // srazky: [{ den: 'RRRR-MM-DD', od: 'HH:MM', mm: 0.3, pozn }] – od daného času se z denního úhrnu odečte mm (nejméně na 0)
 let opravy = LS.get('meteo.opravy', { srazky: [] });
@@ -371,7 +440,7 @@ const rain5 = async d => { const x = await dayDetail(d); return x ? x.hours : nu
 // podrobná měření dne: hodinové srážky a přesné časy maxim a minim
 function dayDetail(d) {
   if (r5inflight.has(d)) return r5inflight.get(d);
-  const p = rain5load(d).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
+  const p = rain5load(d).then(res => ecoFine(d, res)).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
 }
 const EXT = { temp: ['tempHigh', 'tempLow'], dew: ['dewptHigh', 'dewptLow'], hum: ['humidityHigh', 'humidityLow'], press: ['pressureMax', 'pressureMin'], wind: ['windspeedHigh', null], gust: ['windgustHigh', null], solar: ['solarRadiationHigh', null], uv: ['uvHigh', null] };
 async function rain5load(d) {
@@ -1125,6 +1194,7 @@ async function refresh() {
     const wantDet = st.scale === 'day' && p.s <= today();
     const [h, d, det] = await Promise.all([needH ? getRange('hourly', p.s, p.e).then(x => st.v === 'rain' ? applyRain5(x) : x) : [], getRange('daily', p.s, p.e),
       wantDet ? dayDetail(ymd(p.s)).catch(() => null) : null]);
+    await ecoPatch(h, d);
     return { p, h, d, ext: det && det.ext ? det.ext : null, fine: det && det.fine && det.fine.t.length ? det.fine : null };
   };
   setBusy(1);
@@ -1421,6 +1491,11 @@ async function loadCurrent() {
   try {
     const o = (await wuGet('observations/current'))[0];
     if (o) {
+      if (ecoReady()) try {
+        const x = await ecoGet('real_time', { call_back: 'outdoor,pressure' });
+        const v = mslp(ecoVal(x.pressure && x.pressure.absolute), ecoVal(x.outdoor && x.outdoor.temperature), ecoVal(x.outdoor && x.outdoor.humidity));
+        if (v != null) { o.metric = o.metric || {}; o.metric.pressure = v; }
+      } catch (err) { note('Tlak z Ecowittu: ' + err.message); }
       cur = o; renderCurrent();
       if (setCoords(o) && st.scale === 'day') refresh();
     }
@@ -1602,6 +1677,7 @@ function bindUI() {
 
   // nastavení
   const open = () => {
+    $('fEcoApp').value = cfg.ecoApp || ''; $('fEcoKey').value = cfg.ecoKey || ''; $('fEcoMac').value = cfg.ecoMac || ''; $('fEcoAlt').value = cfg.ecoAlt ?? 500;
     $('fStation').value = cfg.station; $('fWuKey').value = cfg.wuKey; $('fRepo').value = cfg.ghRepo || 'meteo-data'; $('fGhToken').value = cfg.ghToken;
     const q = LS.get('meteo.quota', { d: '', n: 0 });
     const hm = k => HMODE_NAMES[LS.get('meteo.hmode.' + k, '')] || 'zatím nezjištěno';
@@ -1626,11 +1702,12 @@ function bindUI() {
     }
     const old = b.textContent; b.textContent = ok ? 'Zkopírováno' : 'Nepodařilo se'; setTimeout(() => { b.textContent = old; }, 1500);
   });
-  $('btnShow').onclick = () => { for (const id of ['fWuKey', 'fGhToken']) $(id).type = $(id).type === 'password' ? 'text' : 'password'; };
+  $('btnShow').onclick = () => { for (const id of ['fWuKey', 'fGhToken', 'fEcoApp', 'fEcoKey']) $(id).type = $(id).type === 'password' ? 'text' : 'password'; };
   $('btnSave').onclick = async () => {
     const msg = $('setMsg'); msg.className = 'msg'; msg.textContent = 'Ověřuji…';
     const stationChanged = cfg.station !== $('fStation').value.trim().toUpperCase();
-    cfg = { ...cfg, station: $('fStation').value.trim().toUpperCase(), wuKey: $('fWuKey').value.trim(), ghRepo: $('fRepo').value.trim() || 'meteo-data', ghToken: $('fGhToken').value.trim() };
+    cfg = { ...cfg, station: $('fStation').value.trim().toUpperCase(), wuKey: $('fWuKey').value.trim(), ghRepo: $('fRepo').value.trim() || 'meteo-data', ghToken: $('fGhToken').value.trim(),
+      ecoApp: $('fEcoApp').value.trim(), ecoKey: $('fEcoKey').value.trim(), ecoMac: $('fEcoMac').value.trim().toUpperCase(), ecoAlt: Number(String($('fEcoAlt').value).replace(',', '.')) || 0 };
     if (!cfg.ghToken) cfg.ghOwner = '';
     LS.set('meteo.cfg', cfg);
     const lines = []; let ok = true;
@@ -1643,6 +1720,15 @@ function bindUI() {
       try { const n = await gh.verify(); lines.push(`✓ GitHub: data se budou ukládat do soukromého repozitáře ${n}.`); }
       catch (err) { ok = false; cfg.ghOwner = ''; lines.push('✗ GitHub: ' + err.message); }
     } else lines.push('GitHub není nastavený, data se ukládají jen v tomto telefonu.');
+    if (ecoReady()) {
+      try {
+        const x = await ecoGet('real_time', { call_back: 'outdoor,pressure' });
+        const pa = ecoVal(x.pressure && x.pressure.absolute); if (pa == null) throw new Error('nevrátil absolutní tlak (zkontrolujte MAC adresu)');
+        const v = mslp(pa, ecoVal(x.outdoor && x.outdoor.temperature), ecoVal(x.outdoor && x.outdoor.humidity));
+        lines.push(`✓ Ecowitt: absolutní tlak ${fmt(pa, 1)} hPa, přepočteno na hladinu moře ${fmt(v, 1)} hPa (výška ${fmt(cfg.ecoAlt, 0)} m).`);
+        if (cur) { cur.metric = cur.metric || {}; cur.metric.pressure = v; }
+      } catch (err) { ok = false; lines.push('✗ Ecowitt: ' + err.message); }
+    }
     LS.set('meteo.cfg', cfg);
     if (stationChanged) { await idb.clear(); LS.del('meteo.hmode.hourly'); LS.del('meteo.hmode.daily'); }
     msg.textContent = lines.join('\n'); msg.className = 'msg ' + (ok ? 'ok' : 'bad');
