@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 59;
+const APP_VERSION = 60;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -374,17 +374,10 @@ function dayDetail(d) {
   const p = rain5load(d).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
 }
 const EXT = { temp: ['tempHigh', 'tempLow'], dew: ['dewptHigh', 'dewptLow'], hum: ['humidityHigh', 'humidityLow'], press: ['pressureMax', 'pressureMin'], wind: ['windspeedHigh', null], gust: ['windgustHigh', null], solar: ['solarRadiationHigh', null], uv: ['uvHigh', null] };
-// DOČASNÝ záznam pro zjištění zpoždění dat z WU (zobrazuje se v nastavení)
-function diag(txt) {
-  const a = LS.get('meteo.diag', []), n = new Date();
-  a.push(`${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())} ${txt}`);
-  LS.set('meteo.diag', a.slice(-80));
-}
 async function rain5load(d) {
   const key = 'day5d/' + d, e = await idb.get(key), isToday = d === ymd(today());
   // dnešní podrobná data se stahují při každém obnovení (každých 5 minut)
-  if (e && (e.final || Date.now() - e.fetchedAt < (isToday ? 4 * 60e3 : STALE))) { if (isToday) diag(`dnešní data z paměti (stáří ${Math.round((Date.now() - e.fetchedAt) / 1000)} s)`); return e; }
-  const t0 = Date.now();
+  if (e && (e.final || Date.now() - e.fetchedAt < (isToday ? 4 * 60e3 : STALE))) return e;
   setBusy(1);
   try {
     // u dneška bývá historie neúplná, proto se doplní měřeními za posledních 24 hodin
@@ -432,7 +425,6 @@ async function rain5load(d) {
       const pmx = g('pressureMax'), pmn = g('pressureMin');
       fine.v.press.push(pmx != null && pmn != null ? (pmx + pmn) / 2 : (pmx ?? pmn ?? g('pressure')));
     }
-    if (isToday) { const lt = fine.t.length ? fine.t[fine.t.length - 1] : null; diag(`staženo: ${fine.t.length} záznamů, nejnovější ${lt == null ? '–' : pad(Math.floor(lt / 60)) + ':' + pad(lt % 60)} (trvalo ${Math.round((Date.now() - t0) / 1000)} s)`); }
     const final = Date.now() > addDays(parseYmd(d), 1).getTime() + 3600e3;
     const res = { final, fetchedAt: Date.now(), hours, ext, fine };
     await idb.set(key, res);
@@ -1613,7 +1605,7 @@ function bindUI() {
     $('fStation').value = cfg.station; $('fWuKey').value = cfg.wuKey; $('fRepo').value = cfg.ghRepo || 'meteo-data'; $('fGhToken').value = cfg.ghToken;
     const q = LS.get('meteo.quota', { d: '', n: 0 });
     const hm = k => HMODE_NAMES[LS.get('meteo.hmode.' + k, '')] || 'zatím nezjištěno';
-    $('quota').textContent = `Dotazů na Weather Underground dnes: ${q.d === ymd(today()) ? q.n : 0} (bezpečný limit 1400).\nStahování historie – hodinová data: ${hm('hourly')}, denní souhrny: ${hm('daily')}.\nVerze aplikace: ${APP_VERSION}\n\nDočasný záznam stahování (nejnovější nahoře):\n${LS.get('meteo.diag', []).slice().reverse().join('\n') || '—'}`;
+    $('quota').textContent = `Dotazů na Weather Underground dnes: ${q.d === ymd(today()) ? q.n : 0} (bezpečný limit 1400).\nStahování historie – hodinová data: ${hm('hourly')}, denní souhrny: ${hm('daily')}.\nVerze aplikace: ${APP_VERSION}`;
     const stt = fcStat(), lbl = { ok: '', nodata: ' · pro vaši polohu nemá data', err: ' · poslední načtení selhalo' };
     $('fcModels').innerHTML = MODELS.map(m => `<label class="chk"><input type="checkbox" data-m="${m.k}"${fcModels.includes(m.k) ? ' checked' : ''}><span class="sw" style="background:${m.c}"></span><span>${esc(m.full)}<small>${lbl[stt[m.k]] || ''}</small></span></label>`).join('');
     $('setMsg').textContent = ''; $('setMsg').className = 'msg'; openSheet('settings');
@@ -1668,7 +1660,7 @@ function bindUI() {
 let lastTick = 0;
 function tick() {
   if (!cfg.station || !cfg.wuKey) return;
-  lastTick = Date.now(); diag('automatické obnovení'); loadCurrent();
+  lastTick = Date.now(); loadCurrent();
   const t = today(), inP = a => { if (!a) return false; const p = periodOf(st.scale, a); return t >= p.s && t < p.e; };
   if (inP(st.anchor) || inP(st.cmp)) refresh();
 }
@@ -1681,7 +1673,7 @@ function start() {
     $('btnSettings').click(); return;
   }
   renderStatus();
-  lastTick = Date.now(); diag('otevření aplikace');
+  LS.del('meteo.diag'); lastTick = Date.now();
   Promise.race([nactiOpravy(), new Promise(r => setTimeout(r, 4000))]).finally(() => { loadCurrent(); refresh(); });
 }
 if (typeof window !== 'undefined' && !window.__METEO_TEST__) start();
