@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 64;
+const APP_VERSION = 65;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -150,14 +150,20 @@ const ecoVal = x => x == null ? null : num(x.value);
 const ecoInflight = new Map();
 // záloha dat z Ecowittu na GitHubu: eco/RRRR/MM/RRRR-MM-DD.json (měřené hodnoty, přepočtený tlak se dopočítá)
 const ecoPath = d => `eco/${d.slice(0, 4)}/${d.slice(5, 7)}/${d}.json`;
+// stejné sloupce ukládá i noční záloha na GitHubu (scripts/ecowitt_zaloha.py)
+const ECO_COLS = ['minuta', 'tlak_absolutni', 'tlak_relativni', 'teplota', 'vlhkost', 'rosny_bod', 'vitr', 'narazy', 'smer', 'zareni', 'uv', 'srazky_den'];
+const ECO_SRC = [['pressure', 'absolute'], ['pressure', 'relative'], ['outdoor', 'temperature'], ['outdoor', 'humidity'], ['outdoor', 'dew_point'],
+  ['wind', 'wind_speed'], ['wind', 'wind_gust'], ['wind', 'wind_direction'], ['solar_and_uvi', 'solar'], ['solar_and_uvi', 'uvi'], ['rainfall', 'daily']];
 function ecoUpload(d, e) {
   if (!gh.ready() || !e || !e.t.length) return;
   const path = ecoPath(d), last = LS.get('meteo.up', {});
   if (!e.final && last[path] && Date.now() - last[path] < 30 * 60e3) return;
-  const doc = { stanice: cfg.ecoMac, den: d, final: e.final, stazeno: new Date(e.fetchedAt).toISOString(), jednotky: { tlak: 'hPa', teplota: '°C', vlhkost: '%' },
-    sloupce: ['minuta', 'tlak_absolutni', 'tlak_relativni', 'teplota', 'vlhkost'], radky: e.t.map((t, i) => [t, e.abs[i], e.rel[i], e.te[i], e.hu[i]]) };
+  const doc = { stanice: cfg.ecoMac, den: d, final: e.final, stazeno: new Date(e.fetchedAt).toISOString(), jednotky: { tlak: 'hPa', teplota: '°C', vlhkost: '%', vitr: 'km/h', zareni: 'W/m²', srazky: 'mm' },
+    sloupce: ECO_COLS, radky: e.rows };
   upChain = upChain.then(async () => {
     try {
+      // kompletní den už uložený (třeba noční zálohou) se nepřepisuje
+      if (e.final) { const g = await gh.getFile(path).catch(() => null); if (g && g.final) { const c = await idb.get('eco5/' + d); if (c) { c.ghDone = true; await idb.set('eco5/' + d, c); } return; } }
       await gh.putFile(path, doc, `${e.final ? 'Ecowitt' : 'Průběžná data Ecowitt'} ${d}`);
       const l = LS.get('meteo.up', {}); l[path] = Date.now(); LS.set('meteo.up', l);
       if (e.final) { const c = await idb.get('eco5/' + d); if (c) { c.ghDone = true; await idb.set('eco5/' + d, c); } }
@@ -171,24 +177,26 @@ function ecoDay(d) {
   const p = (async () => {
     const key = 'eco5/' + d, isToday = d === ymd(today());
     let e = await idb.get(key);
-    if (e && !e.abs) e = null; // starší tvar bez měřených hodnot
+    if (e && !e.rows) e = null; // starší tvar bez všech měřených hodnot
     if (!e && gh.ready()) {
       try {
         const g = await gh.getFile(ecoPath(d));
         if (g && g.final && Array.isArray(g.radky)) {
-          e = { t: g.radky.map(r => r[0]), abs: g.radky.map(r => r[1]), rel: g.radky.map(r => r[2]), te: g.radky.map(r => r[3]), hu: g.radky.map(r => r[4]), final: true, ghDone: true, fetchedAt: Date.parse(g.stazeno) || Date.now() };
+          const ci = n => (g.sloupce || ECO_COLS).indexOf(n), col = n => g.radky.map(r => r[ci(n)] ?? null);
+          e = { t: col('minuta'), abs: col('tlak_absolutni'), rel: col('tlak_relativni'), te: col('teplota'), hu: col('vlhkost'), rows: g.radky, final: true, ghDone: true, fetchedAt: Date.parse(g.stazeno) || Date.now() };
           await idb.set(key, e);
         }
       } catch (err) { note('GitHub (Ecowitt): ' + err.message); }
     }
     if (e && (e.final || Date.now() - e.fetchedAt < (isToday ? 4 * 60e3 : STALE))) { if (e.final && !e.ghDone) ecoUpload(d, e); return ecoCalc(e); }
     try {
-      const x = await ecoGet('history', { start_date: d + ' 00:00:00', end_date: d + ' 23:59:59', cycle_type: '5min', call_back: 'outdoor,pressure' });
-      const L = o => (o && o.list) || {}, pa = L(x.pressure && x.pressure.absolute), pr = L(x.pressure && x.pressure.relative), te = L(x.outdoor && x.outdoor.temperature), hu = L(x.outdoor && x.outdoor.humidity);
-      const n = { t: [], abs: [], rel: [], te: [], hu: [] };
+      const x = await ecoGet('history', { start_date: d + ' 00:00:00', end_date: d + ' 23:59:59', cycle_type: '5min', call_back: 'outdoor,pressure,wind,solar_and_uvi,rainfall', wind_speed_unitid: 7, rainfall_unitid: 12, solar_irradiance_unitid: 16 });
+      const lists = ECO_SRC.map(([a, b]) => ((x[a] || {})[b] || {}).list || {}), pa = lists[0];
+      const n = { t: [], abs: [], rel: [], te: [], hu: [], rows: [] };
       for (const ts of Object.keys(pa).sort((a, b) => a - b)) {
         const dt = new Date(Number(ts) * 1000); if (ymd(dt) !== d || num(pa[ts]) == null) continue;
-        n.t.push(dt.getHours() * 60 + dt.getMinutes()); n.abs.push(num(pa[ts])); n.rel.push(num(pr[ts])); n.te.push(num(te[ts])); n.hu.push(num(hu[ts]));
+        const mi = dt.getHours() * 60 + dt.getMinutes(), row = [mi, ...lists.map(l => num(l[ts]))];
+        n.t.push(mi); n.abs.push(row[1]); n.rel.push(row[2]); n.te.push(row[3]); n.hu.push(row[4]); n.rows.push(row);
       }
       const res = { ...n, final: Date.now() > addDays(parseYmd(d), 1).getTime() + 3600e3, fetchedAt: Date.now() };
       await idb.set(key, res); ecoUpload(d, res);
@@ -196,6 +204,15 @@ function ecoDay(d) {
     } catch (err) { note('Tlak z Ecowittu: ' + err.message); return e ? ecoCalc(e) : null; }
   })().finally(() => ecoInflight.delete(d));
   ecoInflight.set(d, p); return p;
+}
+// při spuštění aplikace doplní na GitHub všechny dny od začátku Ecowittu do včerejška, které tam ještě nejsou kompletní
+async function ecoBackfill() {
+  if (!ecoReady() || !gh.ready()) return;
+  for (let d = parseYmd(cfg.ecoFrom); d < today(); d = addDays(d, 1)) {
+    const k = ymd(d), c = await idb.get('eco5/' + k);
+    if (c && c.rows && c.final && c.ghDone) continue;
+    await ecoDay(k);
+  }
 }
 // souhrn tlaku z Ecowittu po hodinách nebo za celý den: [max, min, průměr]
 function ecoAgg(eco, h) {
@@ -1810,6 +1827,6 @@ function start() {
   }
   renderStatus();
   LS.del('meteo.diag'); lastTick = Date.now();
-  Promise.race([nactiOpravy(), new Promise(r => setTimeout(r, 4000))]).finally(() => { loadCurrent(); refresh(); });
+  Promise.race([nactiOpravy(), new Promise(r => setTimeout(r, 4000))]).finally(() => { loadCurrent(); refresh(); setTimeout(() => ecoBackfill().catch(() => { }), 8000); });
 }
 if (typeof window !== 'undefined' && !window.__METEO_TEST__) start();
