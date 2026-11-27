@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 76;
+const APP_VERSION = 77;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1156,7 +1156,7 @@ function drawChart(el, o) {
     // mřížka: true = na začátku úseku, číslo = poměrná poloha uvnitř úseku (0 až 1)
     const g = o.xGrid ? o.xGrid(i) : false;
     if (g === true || typeof g === 'number') { const gx = f1(L + slot * (i + (g === true ? 0 : g))); s += `<line x1="${gx}" y1="${T}" x2="${gx}" y2="${T + plotH}" stroke="#E5E7EB" stroke-dasharray="2 3"/>`; }
-    const lb = o.xLabel ? o.xLabel(i) : ''; if (lb) s += `<text x="${f1(o.xEdge ? L + slot * i : xc(i))}" y="${H - 6}" text-anchor="middle" font-size="11">${esc(lb)}</text>`;
+    const lb = o.xLabel ? o.xLabel(i) : ''; if (lb) { const lx = o.xLabX ? o.xLabX(i) : null; s += `<text x="${f1(lx != null ? L + slot * lx : o.xEdge ? L + slot * i : xc(i))}" y="${H - 6}" text-anchor="middle" font-size="11">${esc(lb)}</text>`; }
   }
   s += '</g>';
   if (o.icons && n === 24) o.icons.forEach((c, h) => { s += iconSvg(c, L + slot * (h + 0.5) - ISZ / 2, T - IR + 1, ISZ); });
@@ -1388,7 +1388,13 @@ function xAxis(scale, type, B) {
       const a = parseYmd(B[i].d), len = dayDiff(a, parseYmd(B[i].e)) + 1;
       return dayDiff(a, d) / len;
     };
-    return { lab: i => { const d = has(i, 15); return d ? MON[d.getMonth()] : ''; }, grid: hranice };
+    // poloha dne v jednotkách úseků (týdnů); název měsíce leží uprostřed mezi čarami jeho začátku a konce
+    const poloha = d => {
+      for (let i = 0; i < B.length; i++) { const a = parseYmd(B[i].d), e = parseYmd(B[i].e); if (d <= e) return i + dayDiff(a, d) / (dayDiff(a, e) + 1); }
+      return B.length;
+    };
+    const stred = i => { const d = has(i, 15); if (!d) return null; const a = new Date(d.getFullYear(), d.getMonth(), 1); return (poloha(a) + poloha(new Date(d.getFullYear(), d.getMonth() + 1, 1))) / 2; };
+    return { lab: i => { const d = has(i, 15); return d ? MON[d.getMonth()] : ''; }, labX: stred, grid: hranice };
   }
   return { lab: i => D(i) && D(i).getDate() === 15 ? MON[D(i).getMonth()] : '', grid: i => i > 0 && D(i) && D(i).getDate() === 1 };
 }
@@ -1517,7 +1523,7 @@ function chartOpts(a, b) {
   const series = [{ opr: padTo(a.opr || []), vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' && st.scale !== 'week' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
   if (b) series.push({ opr: padTo(b.opr || []), vals: padTo(b.vals.map(x => x.val)) });
   const wv = st.v === 'wind' || st.v === 'gust';
-  const o = { type, n, series, icons: st.scale === 'day' && !b && !wv ? iconRow() : null, arrows: st.scale === 'day' && !b && wv ? windRow() : null, bft: st.v === 'wind', thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
+  const o = { type, n, series, icons: st.scale === 'day' && !b && !wv ? iconRow() : null, arrows: st.scale === 'day' && !b && wv ? windRow() : null, bft: st.v === 'wind', thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xLabX: ax.labX, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
   if (!b && type === 'line') { o.area = st.scale === 'week'; o.tempColor = st.v === 'temp'; }
   const cutAB = b ? Math.min(elapsedCut(model.A.p), elapsedCut(model.B.p)) : Infinity;
   if (b && isFinite(cutAB)) { const lb = b.Bk.length > a.Bk.length ? [b.Bk, model.B.p] : [a.Bk, model.A.p]; o.dimFrom = cutIndex(lb[0], lb[1], cutAB); }
