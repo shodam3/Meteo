@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 74;
+const APP_VERSION = 75;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -325,6 +325,42 @@ function posunUsek(d, m0, m1, krok) {
 }
 const posunVal = (v, o) => v == null ? v : r2(v + o);
 const srazkyOpr = () => (opravy && opravy.srazky) || [];
+// vyřazení a odečtené srážky v hodinových a denních datech (při zobrazení, uložená data jsou původní)
+const VYR_NORM = { teplota: ['temp'], vlhkost: ['hum'], 'rosný bod': ['dew'], vítr: ['wind', 'dir'], nárazy: ['gust'], tlak: ['press'], záření: ['solar'], UV: ['uv'], srážky: [] };
+VYR_NORM['venkovní'] = [...VYR_NORM.teplota, ...VYR_NORM.vlhkost, ...VYR_NORM['rosný bod'], ...VYR_NORM.vítr, ...VYR_NORM.nárazy];
+function opravRecs(recs) {
+  if (!Array.isArray(recs) || !recs.length) return recs;
+  const raw = recs.raw, d0 = recs[0].d, d1 = recs[recs.length - 1].d;
+  // denní souhrny se nevyřazují (stejně jako dřív při stahování), hodinové záznamy ano: hodina se vyřadí, když do ní úsek zasahuje
+  const vy = ((opravy && opravy.vyradit) || []).filter(k => k.do.slice(0, 10) >= d0 && k.od.slice(0, 10) <= d1);
+  const sr = raw ? srazkyOpr().filter(k => k.den >= d0 && k.den <= d1) : [];
+  if (!vy.length && !sr.length) return recs;
+  return recs.map(r => {
+    let out = r; const cp = () => { if (out === r) out = { ...r }; };
+    if (r.h != null) {
+      const h0 = `${r.d} ${pad(r.h)}:00`, h1 = `${r.d} ${pad(r.h)}:59`;
+      for (const k of vy) {
+        if (!(k.od <= h1 && k.do >= h0)) continue;
+        // celý úsek se vyřadí jen z hodin, které pokrývá aspoň z poloviny (s „nad“ stačí jakýkoli překryv)
+        if (k.nad == null) { const a = Math.max(tms(k.od), tms(h0)), b = Math.min(tms(k.do) + 59999, tms(h1) + 59999); if (b - a < 30 * 60e3) continue; }
+        for (const f of VYR_NORM[k.velicina] || []) {
+          const v = out[f]; if (v == null) continue;
+          if (k.nad != null && f === 'dir') continue;
+          const pryc = x => x != null && (k.nad == null || x > k.nad);
+          if (Array.isArray(v)) { if (v.some(pryc)) { cp(); out[f] = v.map(x => pryc(x) ? null : x); } }
+          else if (pryc(v)) { cp(); out[f] = null; }
+        }
+      }
+    }
+    for (const k of sr) {
+      if (k.den !== r.d) continue;
+      const hk = Number((k.od || '00:00').slice(0, 2));
+      if (r.h == null) { cp(); if (out.rc != null) out.rc = Math.max(0, r2(out.rc - k.mm)); if (out.rain != null) out.rain = Math.max(0, r2(out.rain - k.mm)); }
+      else if (r.h >= hk) { cp(); if (out.rc != null) out.rc = Math.max(0, r2(out.rc - k.mm)); if (r.h === hk && out.rain != null) out.rain = Math.max(0, r2(out.rain - k.mm)); }
+    }
+    return out;
+  });
+}
 function posunRecs(recs) {
   if (!Array.isArray(recs) || !(posunList().length || srazkyOpr().length)) return recs;
   return recs.map(r => {
@@ -381,11 +417,11 @@ async function nactiOpravy() {
     const klic = x => JSON.stringify([((x || {}).srazky || []).map(k => [k.den, k.od, k.mm]), ((x || {}).vyradit || []).map(k => [k.velicina, k.od, k.do, k.nad])]);
     const jenPosun = klic(o) === klic(opravy);
     if (!jenPosun) {
-      // dotčené dny a měsíce se musí znovu načíst z WU, aby se oprava projevila
+      // podrobná měření dotčených dnů se opravují při stahování, proto se při otevření dne stáhnou znovu (jeden dotaz na den)
       const dny = new Set([...opravDny(o), ...opravDny(opravy || {})]);
-      for (const d of dny) { await idb.del('day5d/' + d); await idb.del('hourly/' + d.slice(0, 7)); await idb.del('daily/' + d.slice(0, 7)); }
+      for (const d of dny) await idb.del('day5d/' + d);
     }
-    opravy = o; LS.set('meteo.opravy', o); if (!jenPosun) LS.set('meteo.opravyTs', Date.now());
+    opravy = o; LS.set('meteo.opravy', o);
   } catch (err) { note('Opravy dat: ' + err.message); }
 }
 async function wuGet(path, params = {}) {
@@ -407,7 +443,9 @@ async function wuGet(path, params = {}) {
   }
   const t = await r.text(); if (!t.trim()) return [];
   const j = JSON.parse(t);
-  return opravSrazky(j.observations || j.summaries || [], path);
+  // opravy se při stahování přidávají jen do podrobných měření; hodinová a denní data se ukládají původní a opravují při zobrazení
+  const list = j.observations || j.summaries || [];
+  return /\/all/.test(path) ? opravSrazky(list, path) : list;
 }
 
 // převod záznamu z WU do vlastního tvaru
@@ -573,34 +611,36 @@ function monthState(ymStr) {
 function getMonth(kind, ymStr) {
   const k = kind + '/' + ymStr;
   if (inflight.has(k)) return inflight.get(k);
-  const p = loadMonth(kind, ymStr).then(posunRecs).finally(() => inflight.delete(k));
+  const p = loadMonth(kind, ymStr).then(opravRecs).then(posunRecs).finally(() => inflight.delete(k));
   inflight.set(k, p); return p;
 }
 async function loadMonth(kind, ymStr) {
   const state = monthState(ymStr); if (state === 'future') return [];
   const key = kind + '/' + ymStr;
   let e = await idb.get(key);
-  const fresh = x => x && (x.final || Date.now() - x.fetchedAt < STALE);
-  if (fresh(e)) { if (e.final && !e.ghDone) queueUpload(key, e); return e.records; }
+  // starší kopie (bez „raw“) mají opravy už v sobě; u měsíce s odečtenými srážkami by se odečetly podruhé, proto se stáhne znovu
+  const stara = x => x && !x.raw && srazkyOpr().some(k => k.den.startsWith(ymStr));
+  const fresh = x => x && !stara(x) && (x.final || Date.now() - x.fetchedAt < STALE);
+  const vrat = x => { const r = x.records.slice(); r.raw = !!x.raw; return r; };
+  if (fresh(e)) { if (e.final && !e.ghDone) queueUpload(key, e); return vrat(e); }
   if (!e && gh.ready()) {
     try {
       const g = await gh.getFile(ghPath(kind, ymStr));
-      // kopie z GitHubu starší než změna oprav pro tento měsíc se nepoužije, měsíc se stáhne znovu z WU
-      const opTs = LS.get('meteo.opravyTs', 0), dotcen = [...opravDny(opravy || {})].some(d => d.startsWith(ymStr));
-      if (g && Array.isArray(g.records) && !(dotcen && (g.fetchedAt || 0) < opTs)) {
+      // opravy se přidávají až při zobrazení, kopie z GitHubu se proto použije i po změně oprav
+      if (g && Array.isArray(g.records) && !stara(g)) {
         g.ghDone = !!g.final; await idb.set(key, g); e = g;
-        if (fresh(g)) return g.records;
+        if (fresh(g)) return vrat(g);
       }
     } catch (err) { note('GitHub: ' + err.message); }
   }
   setBusy(1);
   try {
     const recs = await fetchMonthWU(kind, ymStr);
-    const ne = { v: 1, kind, month: ymStr, final: state === 'past', fetchedAt: Date.now(), records: recs };
+    const ne = { v: 1, raw: true, kind, month: ymStr, final: state === 'past', fetchedAt: Date.now(), records: recs };
     await idb.set(key, ne); queueUpload(key, ne);
-    return recs;
+    return vrat(ne);
   } catch (err) {
-    if (e) { note(err.message); return e.records; }
+    if (e) { note(err.message); return vrat(e); }
     throw err;
   } finally { setBusy(-1); }
 }
