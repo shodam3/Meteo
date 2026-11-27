@@ -122,11 +122,10 @@ input[type=text],input[type=password]{height:44px;border-radius:10px;border:1px 
 .msg.bad{color:var(--bad)}
 .wheels{position:relative;display:flex;gap:6px;height:200px;background:#fff;border-radius:14px;padding:0 8px;overflow:hidden}
 .wheels::before{content:"";position:absolute;left:8px;right:8px;top:80px;height:40px;background:var(--bg);border-radius:10px;pointer-events:none}
-.wheel{position:relative;flex:1;height:200px;overflow-y:auto;scroll-snap-type:y mandatory;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.wheel{position:relative;flex:1;height:200px;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;perspective:420px;cursor:grab}
+.wtrack{position:absolute;left:0;right:0;top:0;will-change:transform}
 .wheel.wide{flex:2.2}
-.wheel::-webkit-scrollbar{display:none}
-.wpad{height:80px}
-.witem{height:40px;line-height:40px;text-align:center;scroll-snap-align:start;font-size:16px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.witem{height:40px;line-height:40px;text-align:center;transform-origin:50% 50%;backface-visibility:hidden;font-size:16px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
 .witem.on{color:var(--tx);font-weight:700}
 fieldset{border:none;margin:0;padding:12px;background:#fff;border-radius:14px;display:flex;flex-direction:column;gap:10px}
 legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bottom:2px}
@@ -233,6 +232,6 @@ legend{font-weight:700;font-size:14px;padding:0;float:left;width:100%;margin-bot
 </div>
 </div>
 
-<script src="app.js?v=65"></script>
+<script src="app.js?v=66"></script>
 </body>
 </html>

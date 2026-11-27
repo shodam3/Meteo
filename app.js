@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 65;
+const APP_VERSION = 66;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1587,23 +1587,78 @@ const ROW = 40;
 function weeksInYear(y) { return isoWeek(new Date(y, 11, 28)); }
 function isoMonday(y, w) { const j4 = new Date(y, 0, 4); return addDays(j4, -((j4.getDay() + 6) % 7) + 7 * (w - 1)); }
 function isoYear(d) { return addDays(d, 3 - ((d.getDay() + 6) % 7)).getFullYear(); }
+// výběrové kolečko se setrvačností: švihnutí roztočí, plynulé zpomalení, dojezd na nejbližší položku; vzhled válce
 function makeWheel(el, items, idx, onSettle) {
   const w = { el, items, idx, onSettle };
+  const track = document.createElement('div'); track.className = 'wtrack'; el.appendChild(track);
+  let pos = idx * ROW, raf = 0, nodes = [];
+  const maxPos = () => (w.items.length - 1) * ROW;
+  const paint = () => {
+    track.style.transform = `translateY(${80 - pos}px)`;
+    const c = pos / ROW, on = Math.max(0, Math.min(w.items.length - 1, Math.round(c)));
+    nodes.forEach((n, i) => {
+      const d = i - c, a = Math.min(Math.abs(d), 3.2);
+      if (a > 3.1) { n.style.visibility = 'hidden'; return; }
+      n.style.visibility = '';
+      n.style.transform = `rotateX(${(-d * 20).toFixed(1)}deg) scale(${(1 - a * 0.07).toFixed(3)})`;
+      n.style.opacity = (1 - a * 0.27).toFixed(2);
+      n.classList.toggle('on', i === on);
+    });
+  };
   const render = () => {
-    el.innerHTML = '<div class="wpad"></div>' + w.items.map((it, i) => `<div class="witem${i === w.idx ? ' on' : ''}" data-i="${i}">${esc(it.l)}</div>`).join('') + '<div class="wpad"></div>';
-    el.scrollTop = w.idx * ROW;
+    track.innerHTML = w.items.map((it, i) => `<div class="witem" data-i="${i}">${esc(it.l)}</div>`).join('');
+    nodes = [...track.children]; pos = w.idx * ROW; paint();
   };
-  let t = null;
-  el.onscroll = () => {
-    clearTimeout(t);
-    t = setTimeout(() => {
-      const i = Math.max(0, Math.min(w.items.length - 1, Math.round(el.scrollTop / ROW)));
-      if (Math.abs(el.scrollTop - i * ROW) > 1) el.scrollTo({ top: i * ROW, behavior: 'smooth' });
-      if (i !== w.idx) { w.idx = i; for (const c of el.querySelectorAll('.witem')) c.classList.toggle('on', Number(c.dataset.i) === i); w.onSettle && w.onSettle(); }
-    }, 110);
+  const settle = () => {
+    const i = Math.max(0, Math.min(w.items.length - 1, Math.round(pos / ROW)));
+    if (i !== w.idx) { w.idx = i; w.onSettle && w.onSettle(); }
   };
-  el.onclick = e => { const c = e.target.closest('.witem'); if (c) el.scrollTo({ top: Number(c.dataset.i) * ROW, behavior: 'smooth' }); };
-  w.set = (items, idx) => { w.items = items; w.idx = Math.max(0, Math.min(items.length - 1, idx)); render(); };
+  // plynulý dojezd na cíl (exponenciální zpomalení)
+  const animateTo = (target, tau = 325) => {
+    cancelAnimationFrame(raf);
+    target = Math.max(0, Math.min(maxPos(), Math.round(target / ROW) * ROW));
+    const from = pos, amp = target - from, t0 = performance.now();
+    if (Math.abs(amp) < 0.5) { pos = target; paint(); settle(); return; }
+    const step = now => {
+      const e = Math.exp(-(now - t0) / tau);
+      pos = target - amp * e; paint();
+      if (Math.abs(amp * e) > 0.5) raf = requestAnimationFrame(step); else { pos = target; paint(); settle(); }
+    };
+    raf = requestAnimationFrame(step);
+  };
+  // tažení prstem nebo myší
+  let drag = null;
+  el.addEventListener('pointerdown', e => {
+    cancelAnimationFrame(raf);
+    drag = { y: e.clientY, pos, moved: false, samples: [[performance.now(), e.clientY]], target: e.target };
+    el.setPointerCapture(e.pointerId);
+  });
+  el.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dy = e.clientY - drag.y;
+    if (Math.abs(dy) > 4) drag.moved = true;
+    let p = drag.pos - dy;
+    if (p < 0) p = p / 3; else if (p > maxPos()) p = maxPos() + (p - maxPos()) / 3; // pružný okraj
+    pos = p; paint();
+    const now = performance.now(); drag.samples.push([now, e.clientY]);
+    while (drag.samples.length > 2 && now - drag.samples[0][0] > 100) drag.samples.shift();
+  });
+  const end = e => {
+    if (!drag) return;
+    const d = drag; drag = null;
+    if (!d.moved) { // klepnutí: přitočit položku doprostřed
+      const r = el.getBoundingClientRect(), off = Math.round((e.clientY - r.top - 80 - ROW / 2) / ROW);
+      animateTo(pos + off * ROW, 180); return;
+    }
+    const [t0, y0] = d.samples[0], now = performance.now(), dt = Math.max(1, now - t0);
+    const v = (now - t0 > 150) ? 0 : -(e.clientY - y0) / dt; // px/ms
+    animateTo(pos + v * 325);
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  // kolečko myši: po jedné položce
+  el.addEventListener('wheel', e => { e.preventDefault(); const dir = Math.sign(e.deltaY); if (dir) animateTo(Math.round(pos / ROW) * ROW + dir * ROW, 120); }, { passive: false });
+  w.set = (items, i) => { w.items = items; w.idx = Math.max(0, Math.min(items.length - 1, i)); render(); };
   w.val = () => w.items[w.idx].v;
   render(); return w;
 }
@@ -1647,8 +1702,6 @@ function openPicker(which) {
     closeSheet('picker'); st.sel = null; refresh();
   };
   openSheet('picker');
-  // po zobrazení znovu nastavit polohy koleček (skryté prvky nemají rozměry)
-  for (const w of box.querySelectorAll('.wheel')) { const on = w.querySelector('.witem.on'); if (on) w.scrollTop = Number(on.dataset.i) * ROW; }
 }
 
 // ---------- ovládání ----------
