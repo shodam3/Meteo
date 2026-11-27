@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 73;
+const APP_VERSION = 74;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1130,8 +1130,6 @@ function drawChart(el, o) {
         const ww = !two && o.partial && o.partial.i === i ? Math.max(1, w * o.partial.frac) : w;
         const op = se.opr && se.opr[i];
         s += `<rect x="${f1(x)}" y="${f1(top)}" width="${f1(ww)}" height="${f1(base - top)}" rx="${Math.min(2, w / 3)}" fill="url(#${op ? 'h' : 'g'}${k === 0 ? 'A' : 'B'})"/>`;
-        // opravená nebo doplněná hodnota: šrafovaný sloupec a tečka nad ním (nad popiskem hodnoty)
-        if (op) { const lh = k === 0 && lab ? (lab === 'h' ? 11 : txt[i].length * 5.4 + 3) : 0; s += `<circle cx="${f1(x + ww / 2)}" cy="${f1(Math.max(T - 2, top - 5 - lh))}" r="2.2" fill="${k === 0 ? '#0E7490' : '#C2410C'}"/>`; }
       });
     });
     if (lab) {
