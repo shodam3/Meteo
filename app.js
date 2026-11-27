@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 71;
+const APP_VERSION = 72;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -292,22 +292,67 @@ function opravSrazky(list, path = '') {
   }
   return list;
 }
-// posun: [{ velicina: 'tlak', od: 'RRRR-MM-DD', do: 'RRRR-MM-DD', o: hPa }] – soustavně posunutý tlak (špatně nastavená stanice).
+// posun: [{ velicina: 'tlak', od: 'RRRR-MM-DD HH:MM', do: 'RRRR-MM-DD HH:MM', o: hPa, o2?: hPa, popis }] – soustavně posunutý tlak
+// (špatně nastavená stanice). S „o2“ se posun mění plynule od „o“ na začátku do „o2“ na konci úseku.
 // Přičítá se až při zobrazení, uložená data zůstávají původní, takže změna posunu nevyžaduje nové stahování.
-function posunTlaku(d) {
-  let o = 0; for (const k of (opravy && opravy.posun) || []) if (k.velicina === 'tlak' && d >= k.od.slice(0, 10) && d <= k.do.slice(0, 10)) o += k.o;
-  return o;
+// Opravené hodnoty dostanou značku „opr“ (seznam veličin), podle níž se v grafu vyznačí.
+const OPR_VAR = { tlak: 'press', teplota: 'temp', vlhkost: 'hum', 'rosný bod': 'dew', vítr: 'wind', nárazy: 'gust', srážky: 'rain', záření: 'solar', UV: 'uv' };
+const tms = s => new Date(s.replace(' ', 'T')).getTime();
+const celyCas = (s, konec) => s.length > 10 ? s : s + (konec ? ' 23:59' : ' 00:00');
+let posunCache = null;
+function posunList() {
+  if (!posunCache || posunCache.src !== opravy) posunCache = {
+    src: opravy, L: ((opravy && opravy.posun) || []).filter(k => k.velicina === 'tlak').map(k => {
+      const od = celyCas(k.od), dd = celyCas(k.do, true);
+      return { k, a: tms(od), b: tms(dd) + 59999, d0: od.slice(0, 10), d1: dd.slice(0, 10) };
+    })
+  };
+  return posunCache.L;
+}
+function posunAt(ms, L = posunList()) {
+  let o = 0, je = false;
+  for (const p of L) if (ms >= p.a && ms <= p.b) { je = true; o += p.k.o2 != null ? p.k.o + (p.k.o2 - p.k.o) * (ms - p.a) / Math.max(1, p.b - p.a) : p.k.o; }
+  return je ? o : null;
+}
+// průměrný posun v části dne (minuty m0 až m1); null, když do ní žádný posun nezasahuje
+function posunUsek(d, m0, m1, krok) {
+  const L = posunList().filter(p => d >= p.d0 && d <= p.d1); if (!L.length) return null;
+  let s = 0, n = 0, je = false;
+  for (let m = m0; m < m1; m += krok) { const o = posunAt(tms(`${d} ${pad(Math.floor(m / 60))}:${pad(m % 60)}`), L); n++; if (o != null) { s += o; je = true; } }
+  return je ? s / n : null;
 }
 const posunVal = (v, o) => v == null ? v : r2(v + o);
+const srazkyOpr = () => (opravy && opravy.srazky) || [];
 function posunRecs(recs) {
-  if (!Array.isArray(recs) || !((opravy && opravy.posun) || []).length) return recs;
-  return recs.map(r => { const o = r && r.press ? posunTlaku(r.d) : 0; return o ? { ...r, press: r.press.map(v => posunVal(v, o)) } : r; });
+  if (!Array.isArray(recs) || !(posunList().length || srazkyOpr().length)) return recs;
+  return recs.map(r => {
+    if (!r) return r;
+    let out = r;
+    const oz = v => { if (out === r) out = { ...r }; out.opr = [...(out.opr || []), v]; };
+    const o = r.press ? (r.h != null ? posunUsek(r.d, r.h * 60, r.h * 60 + 60, 5) : posunUsek(r.d, 0, 1440, 15)) : null;
+    if (o != null) { oz('press'); out.press = r.press.map(v => posunVal(v, o)); }
+    for (const k of srazkyOpr()) if (k.den === r.d && (r.h == null || r.h === Number((k.od || '00:00').slice(0, 2)))) { oz('rain'); break; }
+    return out;
+  });
 }
 function posunDen(d, res) {
-  const o = posunTlaku(d); if (!o || !res) return res;
-  const out = { ...res };
-  if (res.fine && res.fine.v && res.fine.v.press) out.fine = { ...res.fine, v: { ...res.fine.v, press: res.fine.v.press.map(v => posunVal(v, o)) } };
-  if (res.ext && res.ext.press) out.ext = { ...res.ext, press: { ...res.ext.press, hi: posunVal(res.ext.press.hi, o), lo: posunVal(res.ext.press.lo, o) } };
+  if (!res || !res.fine) return res;
+  const L = posunList().filter(p => d >= p.d0 && d <= p.d1), sr = srazkyOpr().filter(k => k.den === d);
+  if (!L.length && !sr.length) return res;
+  const F = res.fine, opr = {}, v = { ...F.v };
+  if (L.length && F.v.press) {
+    const fl = [];
+    v.press = F.v.press.map((x, i) => { const o = posunAt(tms(`${d} ${hhmm(F.t[i]).padStart(5, '0')}`), L); fl.push(o != null); return o == null ? x : posunVal(x, o); });
+    opr.press = fl;
+  }
+  if (sr.length) { const m0 = Math.min(...sr.map(k => { const [h, m] = (k.od || '00:00').split(':').map(Number); return h * 60 + m; })); opr.rain = F.t.map(t => t >= m0); }
+  const out = { ...res, fine: { ...F, v, opr } };
+  const ep = res.ext && res.ext.press;
+  if (L.length && ep) {
+    const at = t => { const o = t ? posunAt(tms(`${d} ${t.padStart(5, '0')}`), L) : null; return o; };
+    const oh = at(ep.hiT), ol = at(ep.loT);
+    out.ext = { ...res.ext, press: { ...ep, hi: oh == null ? ep.hi : posunVal(ep.hi, oh), lo: ol == null ? ep.lo : posunVal(ep.lo, ol) } };
+  }
   return out;
 }
 // dny, kterých se oprava týká (kvůli obnovení uložených dat)
@@ -323,7 +368,9 @@ async function nactiOpravy() {
     const novy = JSON.stringify(o), stary = JSON.stringify(opravy);
     if (novy === stary) return;
     // posun tlaku se přičítá až při zobrazení, uložená data kvůli němu znovu stahovat netřeba
-    const jenPosun = JSON.stringify([o.srazky, o.vyradit]) === JSON.stringify([(opravy || {}).srazky, (opravy || {}).vyradit]);
+    // (porovnávají se jen údaje, které mění uložená data; změna popisu nebo poznámky nic znovu nestahuje)
+    const klic = x => JSON.stringify([((x || {}).srazky || []).map(k => [k.den, k.od, k.mm]), ((x || {}).vyradit || []).map(k => [k.velicina, k.od, k.do, k.nad])]);
+    const jenPosun = klic(o) === klic(opravy);
     if (!jenPosun) {
       // dotčené dny a měsíce se musí znovu načíst z WU, aby se oprava projevila
       const dny = new Set([...opravDny(o), ...opravDny(opravy || {})]);
@@ -555,7 +602,7 @@ const rain5 = async d => { const x = await dayDetail(d); return x ? x.hours : nu
 // podrobná měření dne: hodinové srážky a přesné časy maxim a minim
 function dayDetail(d) {
   if (r5inflight.has(d)) return r5inflight.get(d);
-  const p = rain5load(d).then(res => posunDen(d, ecoFine(d, res))).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
+  const p = rain5load(d).then(res => ecoFine(d, res)).then(res => posunDen(d, res)).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
 }
 const EXT = { temp: ['tempHigh', 'tempLow'], dew: ['dewptHigh', 'dewptLow'], hum: ['humidityHigh', 'humidityLow'], press: ['pressureMax', 'pressureMin'], wind: ['windspeedHigh', null], gust: ['windgustHigh', null], solar: ['solarRadiationHigh', null], uv: ['uvHigh', null] };
 async function rain5load(d) {
@@ -1048,7 +1095,7 @@ function drawChart(el, o) {
   s += `<defs><linearGradient id="gA" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34E89E"/><stop offset="0.55" stop-color="#3EE6F2"/><stop offset="1" stop-color="#38BDF8"/></linearGradient>`
     + `<linearGradient id="gB" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FDBA74"/><stop offset="1" stop-color="#EA580C"/></linearGradient>`
     + `<linearGradient id="gL" gradientUnits="userSpaceOnUse" x1="0" y1="${T}" x2="0" y2="${H - Bm}"><stop offset="0" stop-color="#14C07C"/><stop offset="0.55" stop-color="#10BCD3"/><stop offset="1" stop-color="#1D8FE0"/></linearGradient>`
-    + FADE_DEFS + (o.tempColor ? tempGrad(y) : '') + `</defs>`;
+    + HATCH_DEFS + FADE_DEFS + (o.tempColor ? tempGrad(y) : '') + `</defs>`;
   if (o.type === 'bar') for (let i = 0; i < n; i += 2) s += `<rect x="${f1(L + slot * i)}" y="${T}" width="${f1(slot)}" height="${f1(plotH)}" fill="#F5F6F8"/>`;
   s += '<g font-size="10" fill="#4B5563" font-family="inherit">';
   for (const t of sc.ticks) {
@@ -1072,7 +1119,10 @@ function drawChart(el, o) {
         const top = Math.min(y(v), base - 1);
         const x = two ? (k === 0 ? xc(i) - w - 0.5 : xc(i) + 0.5) : xc(i) - w / 2;
         const ww = !two && o.partial && o.partial.i === i ? Math.max(1, w * o.partial.frac) : w;
-        s += `<rect x="${f1(x)}" y="${f1(top)}" width="${f1(ww)}" height="${f1(base - top)}" rx="${Math.min(2, w / 3)}" fill="url(#g${k === 0 ? 'A' : 'B'})"/>`;
+        const op = se.opr && se.opr[i];
+        s += `<rect x="${f1(x)}" y="${f1(top)}" width="${f1(ww)}" height="${f1(base - top)}" rx="${Math.min(2, w / 3)}" fill="url(#${op ? 'h' : 'g'}${k === 0 ? 'A' : 'B'})"/>`;
+        // opravená nebo doplněná hodnota: šrafovaný sloupec a tečka nad ním (nad popiskem hodnoty)
+        if (op) { const lh = k === 0 && lab ? (lab === 'h' ? 11 : txt[i].length * 5.4 + 3) : 0; s += `<circle cx="${f1(x + ww / 2)}" cy="${f1(Math.max(T - 2, top - 5 - lh))}" r="2.2" fill="${k === 0 ? '#0E7490' : '#C2410C'}"/>`; }
       });
     });
     if (lab) {
@@ -1113,24 +1163,34 @@ function drawChart(el, o) {
           } else flush();
         }); flush();
       }
-      let d = '', run = 0, lastI = -1;
+      let d = '', run = 0, lastI = -1, dOpr = '', dAll = '', prevOp = false;
       se.vals.forEach((v, i) => {
-        if (v == null) { if (run === 1) s += `<circle cx="${f1(xc(lastI))}" cy="${f1(y(se.vals[lastI]))}" r="2.2" fill="${col}"/>`; run = 0; return; }
-        d += (run ? 'L' : 'M') + f1(xc(i)) + ' ' + f1(y(v)); run++; lastI = i;
+        if (v == null) { if (run === 1) s += `<circle cx="${f1(xc(lastI))}" cy="${f1(y(se.vals[lastI]))}" r="2.2" fill="${col}"/>`; run = 0; prevOp = false; return; }
+        // úsek k opravené nebo doplněné hodnotě se kreslí čárkovaně (zvlášť, plná čára ho vynechá)
+        const op = se.opr && (se.opr[i] || (run && se.opr[lastI]));
+        dAll += (run ? 'L' : 'M') + f1(xc(i)) + ' ' + f1(y(v));
+        // čárkovaná část je jedna souvislá čára, aby se vzor čárek u krátkých úseků neopakoval od začátku
+        if (run && op) { dOpr += (prevOp ? '' : 'M' + f1(xc(lastI)) + ' ' + f1(y(se.vals[lastI]))) + 'L' + f1(xc(i)) + ' ' + f1(y(v)); d += 'M' + f1(xc(i)) + ' ' + f1(y(v)); }
+        else d += (run ? 'L' : 'M') + f1(xc(i)) + ' ' + f1(y(v));
+        prevOp = !!(run && op);
+        if (!run && se.opr && se.opr[i]) dOpr += 'M' + f1(xc(i) - 0.1) + ' ' + f1(y(v)) + 'L' + f1(xc(i) + 0.1) + ' ' + f1(y(v));
+        run++; lastI = i;
       });
       if (run === 1) s += `<circle cx="${f1(xc(lastI))}" cy="${f1(y(se.vals[lastI]))}" r="2.2" fill="${col}"/>`;
       // dokreslení k aktuálnímu měření (probíhající hodina ještě nemá hodinový záznam)
-      if (k === 0 && o.tail && lastI >= 0 && o.tail.x > lastI + 0.5) d += (d ? 'L' : 'M') + f1(L + slot * o.tail.x) + ' ' + f1(y(o.tail.v));
+      if (k === 0 && o.tail && lastI >= 0 && o.tail.x > lastI + 0.5) { const tp = f1(L + slot * o.tail.x) + ' ' + f1(y(o.tail.v)); d += (d ? 'L' : 'M') + tp; dAll += (dAll ? 'L' : 'M') + tp; }
       // plocha pod čarou slábnoucí k ose (týdenní graf)
-      if (k === 0 && o.area && d) {
+      if (k === 0 && o.area && dAll) {
         const base = f1(y(sc.lo));
-        for (const part of d.split('M').filter(Boolean)) {
+        for (const part of dAll.split('M').filter(Boolean)) {
           const pts = part.split('L'); if (pts.length < 2) continue;
           const x0 = pts[0].split(' ')[0], x1 = pts[pts.length - 1].split(' ')[0];
           s += `<path d="M${part}L${x1} ${base}L${x0} ${base}Z" ${o.tempColor ? 'fill="url(#gT)" mask="url(#mF)"' : 'fill="url(#gF)"'} stroke="none"/>`;
         }
       }
-      if (d) s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${o.thin ? 1.3 : n > 100 ? 1.8 : 2.4}" stroke-linejoin="round" stroke-linecap="round"${k ? ' stroke-opacity="0.85"' : ''}/>`;
+      const sw = o.thin ? 1.3 : n > 100 ? 1.8 : 2.4;
+      if (d) s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-linejoin="round" stroke-linecap="round"${k ? ' stroke-opacity="0.85"' : ''}/>`;
+      if (dOpr) s += `<path d="${dOpr}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-dasharray="${OPR_DASH}" stroke-linecap="butt"${k ? ' stroke-opacity="0.85"' : ''}/>`;
     });
   }
   // část za srovnávaným úsekem (souhrn ji nezapočítává) je ztlumená
@@ -1189,6 +1249,21 @@ function tempGrad(y) {
 const FADE_DEFS = `<linearGradient id="gF" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#14C07C" stop-opacity="0.5"/><stop offset="0.5" stop-color="#10BCD3" stop-opacity="0.22"/><stop offset="1" stop-color="#1D8FE0" stop-opacity="0.02"/></linearGradient>`
   + `<linearGradient id="gMf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.6"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.28"/><stop offset="1" stop-color="#fff" stop-opacity="0.03"/></linearGradient><mask id="mF" maskContentUnits="objectBoundingBox"><rect width="1" height="1" fill="url(#gMf)"/></mask>`;
 const hhmm = mi => `${Math.floor(mi / 60)}:${pad(Math.round(mi % 60))}`;
+// označení opravených a doplněných hodnot: čárkovaná čára, šrafovaný sloupec
+const OPR_DASH = '5 4';
+const HATCH_DEFS = `<pattern id="hA" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="#A5ECF0"/><rect width="2" height="5" fill="#0E9FB8"/></pattern>`
+  + `<pattern id="hB" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="#FED7AA"/><rect width="2" height="5" fill="#EA580C"/></pattern>`;
+// rozdělení souvislého úseku na části s opravenými a neopravenými body (sousední části sdílejí krajní bod); null, když nic opravené není
+function runsOpr(sg) {
+  if (!sg.some(p => p[2])) return null;
+  const out = []; let cur = null;
+  sg.forEach((p, i) => {
+    const op = !!p[2] || (i > 0 && !!sg[i - 1][2]);
+    if (!cur || cur.opr !== op) { cur = { opr: op, pts: i > 0 ? [sg[i - 1]] : [] }; out.push(cur); }
+    cur.pts.push(p);
+  });
+  return out.filter(r => r.pts.length > 1 || out.length === 1);
+}
 function drawFine(el, o) {
   const W = Math.max(260, Math.floor(el.clientWidth || 340)), H = 230, R = 4, Bm = 22; let T = 10;
   const all = [];
@@ -1223,15 +1298,16 @@ function drawFine(el, o) {
   if (o.arrows) o.arrows.forEach((a, h) => { s += arrowSvg(a, L + slot * (h + 0.5), T - IR + 8.5) + (o.bft ? bftSvg(a, L + slot * (h + 0.5), T - IR + 26) : ''); });
   if (o.now != null) s += `<line x1="${f1(x(o.now))}" y1="${T}" x2="${f1(x(o.now))}" y2="${T + plotH}" stroke="#111827" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.45"/>`;
   for (const f of o.fc || []) s += `<path d="${monoPath(px(f.pts))}" fill="none" stroke="${f.color}" stroke-opacity="0.9" stroke-width="1.5" stroke-dasharray="4 3"/>`;
-  if (o.b) for (const sg of segments(o.b)) s += `<path d="${monoPath(px(sg))}" fill="none" stroke="#C2410C" stroke-opacity="0.85" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  if (o.b) for (const sg of segments(o.b)) for (const r of runsOpr(sg) || [{ pts: sg }]) s += `<path d="${monoPath(px(r.pts))}" fill="none" stroke="#C2410C" stroke-opacity="0.85" stroke-width="2" stroke-linejoin="round"${r.opr ? ` stroke-dasharray="${OPR_DASH}" stroke-linecap="butt"` : ' stroke-linecap="round"'}/>`;
   if (o.a) for (const sg of segments(o.a)) {
-    const d = monoPath(px(sg));
+    const d = monoPath(px(sg)), oprRuns = runsOpr(sg);
     // podkres od čáry dolů k ose
     const base = f1(y(sc.lo)), x0 = f1(x(sg[0][0])), x1 = f1(x(sg[sg.length - 1][0]));
     const TT = st.v === 'temp'; // plocha slábne směrem k ose, u teploty barva podle hodnoty
     const fill = TT ? 'fill="url(#gT)" mask="url(#mF)"' : 'fill="url(#gF)"';
     s += `<path d="${d}L${x1} ${base}L${x0} ${base}Z" ${fill} stroke="none"/>`
-      + `<path d="${d}" fill="none" stroke="url(#${TT ? 'gT' : 'gL'})" stroke-width="${o.thin ? 1.3 : 2.4}" stroke-linejoin="round" stroke-linecap="round"/>`;
+      + (oprRuns ? oprRuns.map(r => `<path d="${monoPath(px(r.pts))}" fill="none" stroke="url(#${TT ? 'gT' : 'gL'})" stroke-width="${o.thin ? 1.3 : 2.4}" stroke-linejoin="round"${r.opr ? ` stroke-dasharray="${OPR_DASH}" stroke-linecap="butt"` : ' stroke-linecap="round"'}/>`).join('')
+        : `<path d="${d}" fill="none" stroke="url(#${TT ? 'gT' : 'gL'})" stroke-width="${o.thin ? 1.3 : 2.4}" stroke-linejoin="round" stroke-linecap="round"/>`);
   }
   // část za srovnávaným úsekem (souhrn ji nezapočítává) je ztlumená
   { const DX = o.dimFromMin != null ? x(o.dimFromMin) : null; if (DX != null) s += `<rect x="${f1(DX)}" y="${T}" width="${f1(W - R - DX)}" height="${f1(plotH)}" fill="#fff" fill-opacity="0.72"/><line x1="${f1(DX)}" y1="${T}" x2="${f1(DX)}" y2="${T + plotH}" stroke="#6B7280" stroke-width="1" stroke-dasharray="3 3"/>`; }
@@ -1383,8 +1459,8 @@ function chartOpts(a, b) {
   const n = Math.max(a.Bk.length, b ? b.Bk.length : 0);
   const padTo = arr => { const r = arr.slice(); while (r.length < n) r.push(null); return r; };
   const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
-  const series = [{ vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' && st.scale !== 'week' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
-  if (b) series.push({ vals: padTo(b.vals.map(x => x.val)) });
+  const series = [{ opr: padTo(a.opr || []), vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' && st.scale !== 'week' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
+  if (b) series.push({ opr: padTo(b.opr || []), vals: padTo(b.vals.map(x => x.val)) });
   const wv = st.v === 'wind' || st.v === 'gust';
   const o = { type, n, series, icons: st.scale === 'day' && !b && !wv ? iconRow() : null, arrows: st.scale === 'day' && !b && wv ? windRow() : null, bft: st.v === 'wind', thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
   if (!b && type === 'line') { o.area = st.scale === 'week'; o.tempColor = st.v === 'temp'; }
@@ -1395,8 +1471,8 @@ function chartOpts(a, b) {
   if (st.scale === 'day' && type === 'line' && (model.A.fine || future || (b && model.B && model.B.fine))) {
     const toPts = (X, isToday) => {
       if (!X || !X.fine) return null;
-      const vv = X.fine.v[st.v] || [], pts = [];
-      ((st.v === 'press' && X.fine.tp) || X.fine.t).forEach((t, i) => { if (vv[i] != null) pts.push([t, vv[i]]); });
+      const vv = X.fine.v[st.v] || [], pts = [], fl = (X.fine.opr || {})[st.v];
+      ((st.v === 'press' && X.fine.tp) || X.fine.t).forEach((t, i) => { if (vv[i] != null) pts.push(fl && fl[i] ? [t, vv[i], 1] : [t, vv[i]]); });
       if (isToday && cur && String(cur.obsTimeLocal || '').startsWith(ymd(today()))) {
         const m = cur.metric || {}, cv = num({ temp: m.temp, dew: m.dewpt, hum: cur.humidity, press: m.pressure, wind: m.windSpeed, gust: m.windGust, solar: cur.solarRadiation, uv: cur.uv, rain: m.precipTotal }[st.v]);
         const ct = String(cur.obsTimeLocal).slice(11, 16).split(':').map(Number), mi = ct[0] * 60 + ct[1];
@@ -1451,7 +1527,7 @@ function chartOpts(a, b) {
 function draw() {
   if (!model) return;
   const { A, B } = model;
-  const mk = X => { const Bk = buildBuckets(st.scale, chartType(), X.p); fillBuckets(Bk, X.h, X.d); return { Bk, vals: bucketVals(Bk, st.v, curMode()) }; };
+  const mk = X => { const Bk = buildBuckets(st.scale, chartType(), X.p); fillBuckets(Bk, X.h, X.d); return { Bk, vals: bucketVals(Bk, st.v, curMode()), opr: Bk.map(b => b.recs.some(r => r.opr && r.opr.includes(st.v))) }; };
   const a = mk(A), b = B ? mk(B) : null;
   if (st.scale === 'day' && chartType() === 'bar' && VARS[st.v].kind === 'max') { fineHours(a, A); if (b) fineHours(b, B); }
   if (!B && st.scale === 'day' && chartType() === 'bar') liveHour(a);
@@ -1546,7 +1622,7 @@ function renderSummary() {
     }
     if (!A.d.length && !A.h.length) { el.innerHTML = '<p class="note">Pro toto období nejsou žádná data.</p>'; return; }
     const src = st.v === 'rain' && (st.scale === 'day' || st.scale === 'week') && rainSrc ? `<p class="note" style="margin:10px 0 0">${esc(rainSrc)}</p>` : '';
-    el.innerHTML = '<div class="tiles">' + items.map(it => `<div class="st"><span class="l">${esc(it.l)}</span><span class="v ${it.cls || ''}">${fmt(it.val, it.dec)}${it.val != null && it.u ? ' ' + esc(it.u) : ''}</span><span class="n">${esc(it.atText || (it.at ? fmtAt(it.at, st.scale) : (it.n || '')))}</span></div>`).join('') + '</div>' + src;
+    el.innerHTML = '<div class="tiles">' + items.map(it => `<div class="st"><span class="l">${esc(it.l)}</span><span class="v ${it.cls || ''}">${fmt(it.val, it.dec)}${it.val != null && it.u ? ' ' + esc(it.u) : ''}</span><span class="n">${esc(it.atText || (it.at ? fmtAt(it.at, st.scale) : (it.n || '')))}</span></div>`).join('') + '</div>' + src + oprHtml();
     return;
   }
   const cut = Math.min(elapsedCut(A.p), elapsedCut(B.p));
@@ -1562,9 +1638,51 @@ function renderSummary() {
       const jb = ib[k], d = it.val != null && jb && jb.val != null ? it.val - jb.val : null;
       const ds = d == null ? '–' : (d > 0 ? '+' : '') + fmt(d, it.dec);
       return `<tr><td>${esc(it.l)}</td><td>${fmt(it.val, it.dec)}</td><td>${fmt(jb ? jb.val : null, it.dec)}</td><td>${ds}</td></tr>`;
-    }).join('') + `</tbody></table><p class="note" style="margin:8px 0 0">Jednotky: ${esc(V.u || 'index UV')}</p>`;
+    }).join('') + `</tbody></table><p class="note" style="margin:8px 0 0">Jednotky: ${esc(V.u || 'index UV')}</p>` + oprHtml();
 }
 
+// vysvětlení oprav a doplnění, které zasahují do zobrazeného období (jen pro zobrazenou veličinu; vyřazené hodnoty se neuvádějí)
+const VAR_NAZEV = Object.fromEntries(Object.entries(OPR_VAR).map(([k, v]) => [v, k]));
+function oprPolozky(v, obdobi) {
+  const out = [], o = opravy || {};
+  const prekryv = (a, b) => obdobi.some(p => a < p.e.getTime() && b >= p.s.getTime());
+  const cas = (x, konec) => {
+    const d = parseYmd(x.slice(0, 10)), t = x.slice(11, 16), ds = `${d.getDate()}. ${d.getMonth() + 1}. ${d.getFullYear()}`;
+    return !t || t === (konec ? '23:59' : '00:00') ? ds : ds + ' ' + t.replace(/^0(\d)/, '$1');
+  };
+  const cislo = x => fmt(Math.abs(x), 1);
+  // stejný den se nevypisuje dvakrát: „2. 12. 2023 10:24–19:38“
+  const rozsah = (od, dd) => { const a = cas(od), b = cas(dd, true); if (od.slice(0, 10) !== dd.slice(0, 10)) return a + ' – ' + b; const t = dd.slice(11, 16); return t && t !== '23:59' ? a + '–' + t.replace(/^0(\d)/, '$1') : a; };
+  if (v === 'press') for (const k of o.posun || []) {
+    if (k.velicina !== 'tlak') continue;
+    const od = celyCas(k.od), dd = celyCas(k.do, true);
+    if (!prekryv(tms(od), tms(dd) + 59999)) continue;
+    const zm = k.o2 != null ? `${(k.o + k.o2) / 2 >= 0 ? 'zvýšen' : 'snížen'} plynule o ${cislo(k.o)} až ${cislo(k.o2)} hPa` : `${k.o >= 0 ? 'zvýšen' : 'snížen'} o ${cislo(k.o)} hPa`;
+    out.push({ t: tms(od), h: `<b>Tlak ${esc(rozsah(od, dd))}</b> ${zm}. ${esc(k.popis || '')}` });
+  }
+  if (v === 'rain') for (const k of o.srazky || []) {
+    const od = k.den + ' ' + (k.od || '00:00');
+    if (!prekryv(tms(od), tms(k.den + ' 23:59') + 59999)) continue;
+    out.push({ t: tms(od), h: `<b>Srážky ${esc(cas(od))}</b> od této chvíle sníženy o ${fmt(k.mm, 1)} mm. ${esc(k.popis || k.pozn || '')}` });
+  }
+  // doplněné hodnoty: [{ velicina, od, do, zdroj, popis }]
+  for (const k of o.doplneni || []) {
+    if (OPR_VAR[k.velicina] !== v) continue;
+    const od = celyCas(k.od), dd = celyCas(k.do, true);
+    if (!prekryv(tms(od), tms(dd) + 59999)) continue;
+    out.push({ t: tms(od), h: `<b>${esc(k.velicina[0].toUpperCase() + k.velicina.slice(1))} ${esc(rozsah(od, dd))}</b> doplněno${k.zdroj ? ' ze stanice ' + esc(k.zdroj) : ''}. ${esc(k.popis || '')}` });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+function oprHtml() {
+  if (!model) return '';
+  const L = oprPolozky(st.v, [model.A.p, ...(model.B ? [model.B.p] : [])]);
+  if (!L.length) return '';
+  const ico = chartType() === 'bar'
+    ? '<svg width="14" height="14" aria-hidden="true"><defs>' + HATCH_DEFS + '</defs><rect x="1" y="1" width="12" height="12" rx="2" fill="url(#hA)"/></svg>'
+    : '<svg width="22" height="12" aria-hidden="true"><line x1="1" y1="6" x2="21" y2="6" stroke="#10A9C4" stroke-width="2.4" stroke-dasharray="' + OPR_DASH + '"/></svg>';
+  return `<div class="opr"><h3>Opravy a doplnění v tomto období</h3>${L.map(x => `<p>${ico}<span>${x.h}</span></p>`).join('')}</div>`;
+}
 const DIRS = ['S', 'SV', 'V', 'JV', 'J', 'JZ', 'Z', 'SZ'];
 function renderCurrent() {
   if (!cur) { $('now').innerHTML = ''; return; }
