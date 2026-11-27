@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 75;
+const APP_VERSION = 76;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1153,7 +1153,9 @@ function drawChart(el, o) {
     s += `<text x="${L - 3}" y="${yy + 3.5}" text-anchor="end">${fmt(t, tdec)}</text>`;
   }
   for (let i = 0; i < n; i++) {
-    if (o.xGrid && o.xGrid(i)) s += `<line x1="${f1(L + slot * i)}" y1="${T}" x2="${f1(L + slot * i)}" y2="${T + plotH}" stroke="#E5E7EB" stroke-dasharray="2 3"/>`;
+    // mřížka: true = na začátku úseku, číslo = poměrná poloha uvnitř úseku (0 až 1)
+    const g = o.xGrid ? o.xGrid(i) : false;
+    if (g === true || typeof g === 'number') { const gx = f1(L + slot * (i + (g === true ? 0 : g))); s += `<line x1="${gx}" y1="${T}" x2="${gx}" y2="${T + plotH}" stroke="#E5E7EB" stroke-dasharray="2 3"/>`; }
     const lb = o.xLabel ? o.xLabel(i) : ''; if (lb) s += `<text x="${f1(o.xEdge ? L + slot * i : xc(i))}" y="${H - 6}" text-anchor="middle" font-size="11">${esc(lb)}</text>`;
   }
   s += '</g>';
@@ -1380,7 +1382,13 @@ function xAxis(scale, type, B) {
   if (type === 'bar') return { lab: i => MON[i] || '', grid: () => false };
   if (B[0] && B[0].k === 'w') {
     const has = (i, day) => { const b = B[i]; if (!b) return null; for (let d = parseYmd(b.d); ymd(d) <= b.e; d = addDays(d, 1)) if (d.getDate() === day) return d; return null; };
-    return { lab: i => { const d = has(i, 15); return d ? MON[d.getMonth()] : ''; }, grid: i => i > 0 && !!has(i, 1) };
+    // čára měsíce leží přesně na hranici měsíce: uvnitř týdne poměrně podle počtu dní před 1. dnem měsíce
+    const hranice = i => {
+      if (i === 0) return false; const d = has(i, 1); if (!d) return false;
+      const a = parseYmd(B[i].d), len = dayDiff(a, parseYmd(B[i].e)) + 1;
+      return dayDiff(a, d) / len;
+    };
+    return { lab: i => { const d = has(i, 15); return d ? MON[d.getMonth()] : ''; }, grid: hranice };
   }
   return { lab: i => D(i) && D(i).getDate() === 15 ? MON[D(i).getMonth()] : '', grid: i => i > 0 && D(i) && D(i).getDate() === 1 };
 }
