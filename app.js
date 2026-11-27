@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 78;
+const APP_VERSION = 79;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1766,9 +1766,45 @@ function oprPolozky(v, obdobi) {
   }
   return out.sort((a, b) => a.t - b.t);
 }
+// roční přehled: jen které veličiny a ve kterých dnech jsou upravené nebo doplněné, bez podrobností
+function oprSouhrn(obdobi) {
+  const o = opravy || {}, upr = {}, dop = {};
+  const S = obdobi.map(p => [ymd(p.s), ymd(p.e)]), uvnitr = d => S.some(([a, b]) => d >= a && d < b);
+  const pridej = (M, v, d) => { if (!VARS[v] || !uvnitr(d)) return; (M[v] = M[v] || new Set()).add(d); };
+  const useky = (M, v, od, dd) => { for (let d = parseYmd(od.slice(0, 10)), e = parseYmd(dd.slice(0, 10)); d <= e; d = addDays(d, 1)) pridej(M, v, ymd(d)); };
+  if (opravene) {
+    for (const [d, z] of Object.entries(opravene.dny || {})) for (const v of Object.keys(z)) pridej(upr, v, d);
+    for (const [k, z] of Object.entries(opravene.hodiny || {})) for (const v of Object.keys(z)) pridej(upr, v, k.slice(0, 10));
+  }
+  for (const k of o.posun || []) if (k.velicina === 'tlak') for (const [a, b] of k.useky || [[k.od, k.do]]) useky(upr, 'press', a, b);
+  for (const k of o.srazky || []) pridej(upr, 'rain', k.den);
+  for (const k of o.doplneni || []) if (OPR_VAR[k.velicina]) useky(dop, OPR_VAR[k.velicina], k.od, k.do);
+  const roky = new Set(obdobi.map(p => p.s.getFullYear())).size > 1;
+  // souvislé dny se slučují: „5.–8. 4.“, přes hranici měsíce „30. 6. – 2. 7.“
+  const dny = set => {
+    const D = [...set].sort(), out = [];
+    const t = (d, mes = true) => `${d.getDate()}.${mes ? ` ${d.getMonth() + 1}.` : ''}${mes && roky ? ' ' + d.getFullYear() : ''}`;
+    for (let i = 0; i < D.length;) {
+      let j = i; while (j + 1 < D.length && ymd(addDays(parseYmd(D[j]), 1)) === D[j + 1]) j++;
+      const a = parseYmd(D[i]), b = parseYmd(D[j]);
+      out.push(i === j ? t(a) : a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear() ? `${a.getDate()}.–${t(b)}` : `${t(a)} – ${t(b)}`);
+      i = j + 1;
+    }
+    return out.join(', ');
+  };
+  const out = [];
+  for (const v of VAR_ORDER) {
+    const c = [];
+    if (upr[v]) c.push('upraveno ' + dny(upr[v]));
+    if (dop[v]) c.push('doplněno ' + dny(dop[v]));
+    if (c.length) out.push({ h: `<b>${esc(VARS[v].n)}:</b> ${esc(c.join('; '))}` });
+  }
+  return out;
+}
 function oprHtml() {
   if (!model) return '';
-  const L = oprPolozky(st.v, [model.A.p, ...(model.B ? [model.B.p] : [])]);
+  const obd = [model.A.p, ...(model.B ? [model.B.p] : [])];
+  const L = st.scale === 'year' ? oprSouhrn(obd) : oprPolozky(st.v, obd);
   if (!L.length) return '';
   const ico = chartType() === 'bar'
     ? '<svg width="14" height="14" aria-hidden="true"><defs>' + HATCH_DEFS + '</defs><rect x="1" y="1" width="12" height="12" rx="2" fill="url(#hA)"/></svg>'
