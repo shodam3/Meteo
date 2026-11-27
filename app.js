@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 70;
+const APP_VERSION = 71;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -292,6 +292,24 @@ function opravSrazky(list, path = '') {
   }
   return list;
 }
+// posun: [{ velicina: 'tlak', od: 'RRRR-MM-DD', do: 'RRRR-MM-DD', o: hPa }] – soustavně posunutý tlak (špatně nastavená stanice).
+// Přičítá se až při zobrazení, uložená data zůstávají původní, takže změna posunu nevyžaduje nové stahování.
+function posunTlaku(d) {
+  let o = 0; for (const k of (opravy && opravy.posun) || []) if (k.velicina === 'tlak' && d >= k.od.slice(0, 10) && d <= k.do.slice(0, 10)) o += k.o;
+  return o;
+}
+const posunVal = (v, o) => v == null ? v : r2(v + o);
+function posunRecs(recs) {
+  if (!Array.isArray(recs) || !((opravy && opravy.posun) || []).length) return recs;
+  return recs.map(r => { const o = r && r.press ? posunTlaku(r.d) : 0; return o ? { ...r, press: r.press.map(v => posunVal(v, o)) } : r; });
+}
+function posunDen(d, res) {
+  const o = posunTlaku(d); if (!o || !res) return res;
+  const out = { ...res };
+  if (res.fine && res.fine.v && res.fine.v.press) out.fine = { ...res.fine, v: { ...res.fine.v, press: res.fine.v.press.map(v => posunVal(v, o)) } };
+  if (res.ext && res.ext.press) out.ext = { ...res.ext, press: { ...res.ext.press, hi: posunVal(res.ext.press.hi, o), lo: posunVal(res.ext.press.lo, o) } };
+  return out;
+}
 // dny, kterých se oprava týká (kvůli obnovení uložených dat)
 function opravDny(o) {
   const dny = new Set((o.srazky || []).map(k => k.den));
@@ -304,10 +322,14 @@ async function nactiOpravy() {
     const o = await gh.getFile('opravy.json'); if (!o) return;
     const novy = JSON.stringify(o), stary = JSON.stringify(opravy);
     if (novy === stary) return;
-    // dotčené dny a měsíce se musí znovu načíst z WU, aby se oprava projevila
-    const dny = new Set([...opravDny(o), ...opravDny(opravy || {})]);
-    for (const d of dny) { await idb.del('day5d/' + d); await idb.del('hourly/' + d.slice(0, 7)); await idb.del('daily/' + d.slice(0, 7)); }
-    opravy = o; LS.set('meteo.opravy', o); LS.set('meteo.opravyTs', Date.now());
+    // posun tlaku se přičítá až při zobrazení, uložená data kvůli němu znovu stahovat netřeba
+    const jenPosun = JSON.stringify([o.srazky, o.vyradit]) === JSON.stringify([(opravy || {}).srazky, (opravy || {}).vyradit]);
+    if (!jenPosun) {
+      // dotčené dny a měsíce se musí znovu načíst z WU, aby se oprava projevila
+      const dny = new Set([...opravDny(o), ...opravDny(opravy || {})]);
+      for (const d of dny) { await idb.del('day5d/' + d); await idb.del('hourly/' + d.slice(0, 7)); await idb.del('daily/' + d.slice(0, 7)); }
+    }
+    opravy = o; LS.set('meteo.opravy', o); if (!jenPosun) LS.set('meteo.opravyTs', Date.now());
   } catch (err) { note('Opravy dat: ' + err.message); }
 }
 async function wuGet(path, params = {}) {
@@ -495,7 +517,7 @@ function monthState(ymStr) {
 function getMonth(kind, ymStr) {
   const k = kind + '/' + ymStr;
   if (inflight.has(k)) return inflight.get(k);
-  const p = loadMonth(kind, ymStr).finally(() => inflight.delete(k));
+  const p = loadMonth(kind, ymStr).then(posunRecs).finally(() => inflight.delete(k));
   inflight.set(k, p); return p;
 }
 async function loadMonth(kind, ymStr) {
@@ -533,7 +555,7 @@ const rain5 = async d => { const x = await dayDetail(d); return x ? x.hours : nu
 // podrobná měření dne: hodinové srážky a přesné časy maxim a minim
 function dayDetail(d) {
   if (r5inflight.has(d)) return r5inflight.get(d);
-  const p = rain5load(d).then(res => ecoFine(d, res)).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
+  const p = rain5load(d).then(res => posunDen(d, ecoFine(d, res))).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
 }
 const EXT = { temp: ['tempHigh', 'tempLow'], dew: ['dewptHigh', 'dewptLow'], hum: ['humidityHigh', 'humidityLow'], press: ['pressureMax', 'pressureMin'], wind: ['windspeedHigh', null], gust: ['windgustHigh', null], solar: ['solarRadiationHigh', null], uv: ['uvHigh', null] };
 async function rain5load(d) {
