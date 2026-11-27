@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 72;
+const APP_VERSION = 73;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -302,10 +302,11 @@ const celyCas = (s, konec) => s.length > 10 ? s : s + (konec ? ' 23:59' : ' 00:0
 let posunCache = null;
 function posunList() {
   if (!posunCache || posunCache.src !== opravy) posunCache = {
-    src: opravy, L: ((opravy && opravy.posun) || []).filter(k => k.velicina === 'tlak').map(k => {
-      const od = celyCas(k.od), dd = celyCas(k.do, true);
+    // s „useky“ ([[od, do], …]) platí posun jen v těchto krátkých úsecích (stanice přeskakovala mezi dvěma nastaveními)
+    src: opravy, L: ((opravy && opravy.posun) || []).filter(k => k.velicina === 'tlak').flatMap(k => (k.useky || [[k.od, k.do]]).map(([u0, u1]) => {
+      const od = celyCas(u0), dd = celyCas(u1, true);
       return { k, a: tms(od), b: tms(dd) + 59999, d0: od.slice(0, 10), d1: dd.slice(0, 10) };
-    })
+    }))
   };
   return posunCache.L;
 }
@@ -317,9 +318,10 @@ function posunAt(ms, L = posunList()) {
 // průměrný posun v části dne (minuty m0 až m1); null, když do ní žádný posun nezasahuje
 function posunUsek(d, m0, m1, krok) {
   const L = posunList().filter(p => d >= p.d0 && d <= p.d1); if (!L.length) return null;
-  let s = 0, n = 0, je = false;
-  for (let m = m0; m < m1; m += krok) { const o = posunAt(tms(`${d} ${pad(Math.floor(m / 60))}:${pad(m % 60)}`), L); n++; if (o != null) { s += o; je = true; } }
-  return je ? s / n : null;
+  let s = 0, n = 0, je = 0, ext = 0;
+  for (let m = m0; m < m1; m += krok) { const o = posunAt(tms(`${d} ${pad(Math.floor(m / 60))}:${pad(m % 60)}`), L); n++; if (o != null) { s += o; je++; if (Math.abs(o) > Math.abs(ext)) ext = o; } }
+  if (!je) return null;
+  const r = new Number(s / n); r.ext = ext; r.cast = je < n; r.useky = L.some(p => p.k.useky); return r;
 }
 const posunVal = (v, o) => v == null ? v : r2(v + o);
 const srazkyOpr = () => (opravy && opravy.srazky) || [];
@@ -330,7 +332,14 @@ function posunRecs(recs) {
     let out = r;
     const oz = v => { if (out === r) out = { ...r }; out.opr = [...(out.opr || []), v]; };
     const o = r.press ? (r.h != null ? posunUsek(r.d, r.h * 60, r.h * 60 + 60, 5) : posunUsek(r.d, 0, 1440, 15)) : null;
-    if (o != null) { oz('press'); out.press = r.press.map(v => posunVal(v, o)); }
+    if (o != null) {
+      oz('press');
+      // přeskakující nastavení jen v části hodiny (dne): extrém na straně chybných záznamů pochází z nich, opraví se celým posunem, druhý extrém zůstává
+      const [mx, mn, av] = r.press;
+      if (o.useky && o.cast && mx != null && mn != null && mx - mn >= 0.6 * Math.abs(o.ext)) {
+        out.press = o.ext > 0 ? [mx, Math.min(mx, posunVal(mn, o.ext)), posunVal(av, +o)] : [Math.max(mn, posunVal(mx, o.ext)), mn, posunVal(av, +o)];
+      } else out.press = r.press.map(v => posunVal(v, +o));
+    }
     for (const k of srazkyOpr()) if (k.den === r.d && (r.h == null || r.h === Number((k.od || '00:00').slice(0, 2)))) { oz('rain'); break; }
     return out;
   });
@@ -1657,7 +1666,7 @@ function oprPolozky(v, obdobi) {
     if (k.velicina !== 'tlak') continue;
     const od = celyCas(k.od), dd = celyCas(k.do, true);
     if (!prekryv(tms(od), tms(dd) + 59999)) continue;
-    const zm = k.o2 != null ? `${(k.o + k.o2) / 2 >= 0 ? 'zvýšen' : 'snížen'} plynule o ${cislo(k.o)} až ${cislo(k.o2)} hPa` : `${k.o >= 0 ? 'zvýšen' : 'snížen'} o ${cislo(k.o)} hPa`;
+    const zm = k.useky ? `chybné záznamy zvýšeny o ${cislo(k.o)} hPa` : k.o2 != null ? `${(k.o + k.o2) / 2 >= 0 ? 'zvýšen' : 'snížen'} plynule o ${cislo(k.o)} až ${cislo(k.o2)} hPa` : `${k.o >= 0 ? 'zvýšen' : 'snížen'} o ${cislo(k.o)} hPa`;
     out.push({ t: tms(od), h: `<b>Tlak ${esc(rozsah(od, dd))}</b> ${zm}. ${esc(k.popis || '')}` });
   }
   if (v === 'rain') for (const k of o.srazky || []) {
