@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 69;
+const APP_VERSION = 70;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -284,7 +284,11 @@ function opravSrazky(list, path = '') {
       let sub = 0; for (const k of os) if (k.den === den && cas >= (k.od || '00:00')) sub += k.mm;
       if (sub) m.precipTotal = Math.max(0, Math.round((m.precipTotal - sub) * 100) / 100);
     }
-    if (!souhrn) for (const k of vy) if (kdy >= k.od && kdy <= k.do) for (const f of VYR_POLE[k.velicina] || []) { if (f in m) m[f] = null; if (f in o) o[f] = null; }
+    // s „nad“ se vyřadí jen hodnoty nad touto mezí (nemožné hodnoty), jinak celý úsek
+    if (!souhrn) for (const k of vy) if (kdy >= k.od && kdy <= k.do) for (const f of VYR_POLE[k.velicina] || []) {
+      if (k.nad != null) { if (m[f] != null && m[f] > k.nad) m[f] = null; if (o[f] != null && o[f] > k.nad) o[f] = null; continue; }
+      if (f in m) m[f] = null; if (f in o) o[f] = null;
+    }
   }
   return list;
 }
