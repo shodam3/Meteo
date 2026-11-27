@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 77;
+const APP_VERSION = 78;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -328,6 +328,14 @@ const srazkyOpr = () => (opravy && opravy.srazky) || [];
 // vyřazení a odečtené srážky v hodinových a denních datech (při zobrazení, uložená data jsou původní)
 const VYR_NORM = { teplota: ['temp'], vlhkost: ['hum'], 'rosný bod': ['dew'], vítr: ['wind', 'dir'], nárazy: ['gust'], tlak: ['press'], záření: ['solar'], UV: ['uv'], srážky: [] };
 VYR_NORM['venkovní'] = [...VYR_NORM.teplota, ...VYR_NORM.vlhkost, ...VYR_NORM['rosný bod'], ...VYR_NORM.vítr, ...VYR_NORM.nárazy];
+// přepočtené souhrny (opravene.json, vytváří skript prepocet_oprav.py v úložišti dat): hodinové a denní souhrny dnů
+// s vyřazenými měřeními spočtené znovu z pětiminutových dat; u těchto dnů nahrazují vyřazení podle úseků
+let opravene = null, opravIdx = null;
+function prepocet() {
+  if (!opravene) return null;
+  if (!opravIdx || opravIdx.src !== opravene) opravIdx = { src: opravene, pokryte: new Set(opravene.pokryte_dny || []), hodiny: opravene.hodiny || {}, dny: opravene.dny || {} };
+  return opravIdx;
+}
 function opravRecs(recs) {
   if (!Array.isArray(recs) || !recs.length) return recs;
   const raw = recs.raw, d0 = recs[0].d, d1 = recs[recs.length - 1].d;
@@ -335,9 +343,14 @@ function opravRecs(recs) {
   const vy = ((opravy && opravy.vyradit) || []).filter(k => k.do.slice(0, 10) >= d0 && k.od.slice(0, 10) <= d1);
   const sr = raw ? srazkyOpr().filter(k => k.den >= d0 && k.den <= d1) : [];
   if (!vy.length && !sr.length) return recs;
+  const P = vy.length ? prepocet() : null;
   return recs.map(r => {
     let out = r; const cp = () => { if (out === r) out = { ...r }; };
-    if (r.h != null) {
+    if (P && P.pokryte.has(r.d)) {
+      // přepočtené hodnoty nahradí původní a vyznačí se jako opravené
+      const z = r.h != null ? P.hodiny[`${r.d} ${pad(r.h)}`] : P.dny[r.d];
+      if (z) for (const [v, x] of Object.entries(z)) { cp(); out[v] = Array.isArray(x) ? x.slice() : x; if (v !== 'dir') out.opr = [...(out.opr || []), v]; }
+    } else if (r.h != null) {
       const h0 = `${r.d} ${pad(r.h)}:00`, h1 = `${r.d} ${pad(r.h)}:59`;
       for (const k of vy) {
         if (!(k.od <= h1 && k.do >= h0)) continue;
@@ -406,7 +419,20 @@ function opravDny(o) {
   for (const k of o.vyradit || []) for (let d = parseYmd(k.od.slice(0, 10)), e = parseYmd(k.do.slice(0, 10)); d <= e; d = addDays(d, 1)) dny.add(ymd(d));
   return dny;
 }
+async function nactiOpravene() {
+  if (!opravene) { try { opravene = await idb.get('opravene'); } catch { } }
+  if (!gh.ready()) return;
+  try {
+    const o = await gh.getFile('opravene.json'); if (!o || !o.pokryte_dny) return;
+    if (opravene && o.otisk === opravene.otisk) return;
+    opravene = o; await idb.set('opravene', o);
+  } catch (err) { note('Přepočtené souhrny: ' + err.message); }
+}
 async function nactiOpravy() {
+  const pp = nactiOpravene();
+  try { await nactiOpravyJen(); } finally { await pp; }
+}
+async function nactiOpravyJen() {
   if (!gh.ready()) return;
   try {
     const o = await gh.getFile('opravy.json'); if (!o) return;
@@ -1725,6 +1751,11 @@ function oprPolozky(v, obdobi) {
     const od = k.den + ' ' + (k.od || '00:00');
     if (!prekryv(tms(od), tms(k.den + ' 23:59') + 59999)) continue;
     out.push({ t: tms(od), h: `<b>Srážky ${esc(cas(od))}</b> od této chvíle sníženy o ${fmt(k.mm, 1)} mm. ${esc(k.popis || k.pozn || '')}` });
+  }
+  // vyřazená chybná měření, po nichž se souhrny přepočítaly (jen ta, která danou veličinu skutečně změnila)
+  for (const k of (opravene && opravene.polozky) || []) {
+    if (!(k.v || []).includes(v) || !prekryv(tms(k.od), tms(k.do) + 59999)) continue;
+    out.push({ t: tms(k.od), h: `<b>${esc(VARS[v].n)} ${esc(k.od === k.do ? cas(k.od) : rozsah(k.od, k.do))}</b> ${k.od === k.do ? 'chybné měření vyřazeno' : 'chybná měření vyřazena'}${k.nad != null ? ` (jen hodnoty nad ${fmt(k.nad, 0)}${VARS[v].u ? ' ' + VARS[v].u : ''})` : ''}, souhrny přepočteny ze zbylých měření. ${esc(k.pozn || '')}` });
   }
   // doplněné hodnoty: [{ velicina, od, do, zdroj, popis }]
   for (const k of o.doplneni || []) {
