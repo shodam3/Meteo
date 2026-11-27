@@ -286,7 +286,7 @@ function opravSrazky(list, path = '') {
     }
     // s „nad“ se vyřadí jen hodnoty nad touto mezí (nemožné hodnoty), jinak celý úsek
     if (!souhrn) for (const k of vy) if (kdy >= k.od && kdy <= k.do) for (const f of VYR_POLE[k.velicina] || []) {
-      if (k.nad != null) { if (m[f] != null && m[f] > k.nad) m[f] = null; if (o[f] != null && o[f] > k.nad) o[f] = null; continue; }
+      if (k.nad != null) { if (/dir/.test(f)) continue; if (m[f] != null && m[f] > k.nad) m[f] = null; if (o[f] != null && o[f] > k.nad) o[f] = null; continue; }
       if (f in m) m[f] = null; if (f in o) o[f] = null;
     }
   }
