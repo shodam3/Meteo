@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 68;
+const APP_VERSION = 69;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -270,6 +270,8 @@ const VYR_POLE = {
   UV: ['uv', 'uvHigh'],
   srážky: ['precipRate']
 };
+// výpadek venkovního čidla: všechny venkovní veličiny najednou
+VYR_POLE['venkovní'] = [...VYR_POLE.teplota, ...VYR_POLE.vlhkost, ...VYR_POLE['rosný bod'], ...VYR_POLE.vítr, ...VYR_POLE.nárazy];
 function opravSrazky(list, path = '') {
   if (!Array.isArray(list) || !opravy) return list;
   const os = opravy.srazky || [], vy = opravy.vyradit || [];
