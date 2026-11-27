@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 66;
+const APP_VERSION = 67;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1591,7 +1591,7 @@ function isoYear(d) { return addDays(d, 3 - ((d.getDay() + 6) % 7)).getFullYear(
 function makeWheel(el, items, idx, onSettle) {
   const w = { el, items, idx, onSettle };
   const track = document.createElement('div'); track.className = 'wtrack'; el.appendChild(track);
-  let pos = idx * ROW, raf = 0, nodes = [];
+  let pos = idx * ROW, raf = 0, nodes = [], goal = null; // goal = cílová položka probíhajícího dojezdu
   const maxPos = () => (w.items.length - 1) * ROW;
   const paint = () => {
     track.style.transform = `translateY(${80 - pos}px)`;
@@ -1607,22 +1607,22 @@ function makeWheel(el, items, idx, onSettle) {
   };
   const render = () => {
     track.innerHTML = w.items.map((it, i) => `<div class="witem" data-i="${i}">${esc(it.l)}</div>`).join('');
-    nodes = [...track.children]; pos = w.idx * ROW; paint();
+    nodes = [...track.children]; pos = w.idx * ROW; goal = null; paint();
   };
   const settle = () => {
     const i = Math.max(0, Math.min(w.items.length - 1, Math.round(pos / ROW)));
     if (i !== w.idx) { w.idx = i; w.onSettle && w.onSettle(); }
   };
   // plynulý dojezd na cíl (exponenciální zpomalení)
-  const animateTo = (target, tau = 325) => {
+  const animateTo = (target, tau = 120) => {
     cancelAnimationFrame(raf);
-    target = Math.max(0, Math.min(maxPos(), Math.round(target / ROW) * ROW));
+    target = Math.max(0, Math.min(maxPos(), Math.round(target / ROW) * ROW)); goal = target / ROW;
     const from = pos, amp = target - from, t0 = performance.now();
-    if (Math.abs(amp) < 0.5) { pos = target; paint(); settle(); return; }
+    if (Math.abs(amp) < 0.5) { pos = target; goal = null; paint(); settle(); return; }
     const step = now => {
       const e = Math.exp(-(now - t0) / tau);
       pos = target - amp * e; paint();
-      if (Math.abs(amp * e) > 0.5) raf = requestAnimationFrame(step); else { pos = target; paint(); settle(); }
+      if (Math.abs(amp * e) > 1) raf = requestAnimationFrame(step); else { pos = target; goal = null; paint(); settle(); }
     };
     raf = requestAnimationFrame(step);
   };
@@ -1648,18 +1648,19 @@ function makeWheel(el, items, idx, onSettle) {
     const d = drag; drag = null;
     if (!d.moved) { // klepnutí: přitočit položku doprostřed
       const r = el.getBoundingClientRect(), off = Math.round((e.clientY - r.top - 80 - ROW / 2) / ROW);
-      animateTo(pos + off * ROW, 180); return;
+      animateTo(pos + off * ROW, 90); return;
     }
     const [t0, y0] = d.samples[0], now = performance.now(), dt = Math.max(1, now - t0);
     const v = (now - t0 > 150) ? 0 : -(e.clientY - y0) / dt; // px/ms
-    animateTo(pos + v * 325);
+    animateTo(pos + v * 300, Math.abs(v) > 0.3 ? 200 : 90);
   };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
   // kolečko myši: po jedné položce
-  el.addEventListener('wheel', e => { e.preventDefault(); const dir = Math.sign(e.deltaY); if (dir) animateTo(Math.round(pos / ROW) * ROW + dir * ROW, 120); }, { passive: false });
+  el.addEventListener('wheel', e => { e.preventDefault(); const dir = Math.sign(e.deltaY); if (dir) animateTo((goal ?? Math.round(pos / ROW)) * ROW + dir * ROW, 70); }, { passive: false });
   w.set = (items, i) => { w.items = items; w.idx = Math.max(0, Math.min(items.length - 1, i)); render(); };
-  w.val = () => w.items[w.idx].v;
+  // hodnota je položka, na které kolečko skončí, i když ještě dojíždí nebo je pod prstem
+  w.val = () => w.items[Math.max(0, Math.min(w.items.length - 1, goal ?? Math.round(pos / ROW)))].v;
   render(); return w;
 }
 function openPicker(which) {
