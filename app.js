@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 83;
+const APP_VERSION = 84;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -826,8 +826,8 @@ async function rain5load(d) {
   // dnešní podrobná data se stahují při každém obnovení (každých 5 minut)
   // den z úložiště platí trvale; den z WU (dřív stažený nebo v úložišti ještě nebyl) se po čase zkusí vzít z úložiště
   const petOt = dbIndex && dbIndex.pet ? dbIndex.pet[d] : null;
-  if (e && e.sv === 2 && (petOt ? e.src === 'pet' && e.otisk === petOt : e.src === 'fine') ) return e;
-  if (e && e.sv === 2 && !petOt && ( (e.final && !gh.ready()) || Date.now() - e.fetchedAt < (isToday ? 4 * 60e3 : e.final ? 6 * 3600e3 : STALE))) return e;
+  if (e && e.sv === 3 && (petOt ? e.src === 'pet' && e.otisk === petOt : e.src === 'fine') ) return e;
+  if (e && e.sv === 3 && !petOt && ( (e.final && !gh.ready()) || Date.now() - e.fetchedAt < (isToday ? 4 * 60e3 : e.final ? 6 * 3600e3 : STALE))) return e;
   setBusy(1);
   try {
     // u dneška bývá historie neúplná, proto se doplní měřeními za posledních 24 hodin
@@ -835,7 +835,7 @@ async function rain5load(d) {
     // starší dny se berou z úložiště dat (fine/, noční stahování); z WU jen dnešek a dny, které tam ještě nejsou
     let src = 'wu';
     if (!isToday && petOt) { obs = await fineRepo(d, true); if (obs) src = 'pet'; }
-    if (!isToday && !obs) { obs = await fineRepo(d); if (obs) src = 'fine'; }
+    if (!isToday && src !== 'pet') { obs = await fineRepo(d); if (obs) src = 'fine'; }
     if (!isToday && obs == null) obs = await wuGet('history/all', { date: d.replace(/-/g, '') });
     if (isToday) {
       let x = [];
@@ -884,7 +884,7 @@ async function rain5load(d) {
     const op = Object.fromEntries(DOPL.filter(k => dopl[k].some(Boolean)).map(k => [k, dopl[k]]));
     if (Object.keys(op).length) fine.opr = op;
     const final = Date.now() > addDays(parseYmd(d), 1).getTime() + 3600e3;
-    const res = { sv: 2, final, src, otisk: src === 'pet' ? petOt : undefined, fetchedAt: Date.now(), hours, ext, fine, sum: souhrnZObs(d, obs) };
+    const res = { sv: 3, final, src, otisk: src === 'pet' ? petOt : undefined, fetchedAt: Date.now(), hours, ext, fine, sum: souhrnZObs(d, obs) };
     await idb.set(key, res);
     return res;
   } catch (err) { note('Podrobná měření: ' + err.message); return e || null; }
