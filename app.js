@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 80;
+const APP_VERSION = 81;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -46,8 +46,9 @@ const VARS = {
   wind: { n: 'Vítr', u: 'km/h', dec: 1, kind: 'hla', chart: 'bar', zero: true, noMin: true },
   gust: { n: 'Nárazy', u: 'km/h', dec: 1, kind: 'hla', chart: 'bar', zero: true, noMin: true },
   rain: { n: 'Srážky', u: 'mm', dec: 1, kind: 'sum', chart: 'bar', zero: true },
-  solar: { n: 'Záření', u: 'W/m²', dec: 0, kind: 'max', chart: 'bar', zero: true, barOnly: true },
-  uv: { n: 'UV', u: '', dec: 1, kind: 'max', chart: 'bar', zero: true, barOnly: true }
+  // záření a UV: po hodinách maximum / minimum / průměr, po dnech a týdnech (měsíční a roční graf) jen maximum / průměr
+  solar: { n: 'Záření', u: 'W/m²', dec: 0, kind: 'hla', chart: 'bar', zero: true, barOnly: true, get noMin() { return st.scale === 'month' || st.scale === 'year'; } },
+  uv: { n: 'UV', u: '', dec: 1, kind: 'hla', chart: 'bar', zero: true, barOnly: true, get noMin() { return st.scale === 'month' || st.scale === 'year'; } }
 };
 
 // ---------- nastavení a stav ----------
@@ -429,7 +430,8 @@ async function nactiOpravene() {
   } catch (err) { note('Přepočtené souhrny: ' + err.message); }
 }
 async function nactiOpravy() {
-  const pp = nactiOpravene();
+  // s databází se přepočtené souhrny (opravene.json) nepoužívají; bez ní jen jako dřív
+  const pp = gh.ready() && (await dbIdx()) ? Promise.resolve() : nactiOpravene();
   try { await nactiOpravyJen(); } finally { await pp; }
 }
 async function nactiOpravyJen() {
@@ -489,8 +491,8 @@ function norm(o, daily) {
     wind: hl('windspeedHigh', 'windspeedLow', 'windspeedAvg'),
     gust: hl('windgustHigh', 'windgustLow', 'windgustAvg'),
     rc: num(m.precipTotal),
-    solar: num(o.solarRadiationHigh),
-    uv: num(o.uvHigh),
+    solar: [num(o.solarRadiationHigh), null, null],
+    uv: [num(o.uvHigh), null, null],
     dir: num(o.winddirAvg)
   };
   if (!daily) r.h = Number(loc.slice(11, 13));
@@ -625,6 +627,51 @@ function queueUpload(key, e) {
   });
 }
 
+// ---------- databáze (db/ v úložišti dat, vytváří ji noční skript scripts/databaze.py) ----------
+// Hodinová a denní data za celou dobu stanice spočtená z pětiminutových dat i s opravami a doplněními.
+// Přehled db/index.json nese otisk každého měsíce; uložený měsíc se znovu stáhne, jen když se otisk změní.
+// Dny po konci databáze (dnešek, ráno i včerejšek) si aplikace spočítá sama z pětiminutových dat (souhrnDne).
+let dbIndex = null, dbIndexAt = 0, dbIndexP = null;
+async function dbIdx() {
+  if (!gh.ready()) return null;
+  if (dbIndex && Date.now() - dbIndexAt < 30 * 60e3) return dbIndex;
+  if (dbIndexP) return dbIndexP;
+  dbIndexP = (async () => {
+    try {
+      const i = await gh.getFile('db/index.json');
+      if (i && i.mesice && i.do) { dbIndex = i; dbIndexAt = Date.now(); await idb.set('db/index', i); }
+    } catch (err) { note('Databáze: ' + err.message); }
+    if (!dbIndex) { try { dbIndex = await idb.get('db/index'); } catch { } }
+    return dbIndex;
+  })().finally(() => { dbIndexP = null; });
+  return dbIndexP;
+}
+const dbOn = () => !!(gh.ready() && dbIndex);
+async function loadMonthDb(kind, ymStr, I) {
+  if (monthState(ymStr) === 'future') return [];
+  const key = 'db/' + kind + '/' + ymStr, ot = I.mesice[ymStr] && I.mesice[ymStr][kind];
+  let recs = [];
+  if (ot) {
+    let e = await idb.get(key);
+    if (!e || e.otisk !== ot) {
+      setBusy(1);
+      try {
+        const g = await gh.getFile(`db/${kind}/${ymStr}.json`);
+        if (g && Array.isArray(g.records)) { e = { otisk: ot, records: g.records }; await idb.set(key, e); }
+      } catch (err) { note('Databáze: ' + err.message); }
+      finally { setBusy(-1); }
+    }
+    if (e) recs = e.records.slice();
+  }
+  const td = ymd(today()), dny = [];
+  for (let d = parseYmd(ymStr + '-01'); ymOf(d) === ymStr && ymd(d) <= td; d = addDays(d, 1)) if (ymd(d) > I.do) dny.push(ymd(d));
+  if (dny.length) {
+    const R = await Promise.all(dny.map(d => dayDetail(d).catch(() => null)));
+    R.forEach((x, i) => { if (!x || !x.sum) return; if (kind === 'hourly') recs.push(...x.sum.hours.map(h => ({ d: dny[i], ...h }))); else recs.push({ d: dny[i], ...x.sum.day }); });
+  }
+  return recs;
+}
+
 // ---------- načítání dat po měsících ----------
 const STALE = 10 * 60e3;
 const inflight = new Map();
@@ -637,7 +684,7 @@ function monthState(ymStr) {
 function getMonth(kind, ymStr) {
   const k = kind + '/' + ymStr;
   if (inflight.has(k)) return inflight.get(k);
-  const p = loadMonth(kind, ymStr).then(opravRecs).then(posunRecs).finally(() => inflight.delete(k));
+  const p = dbIdx().then(I => I ? loadMonthDb(kind, ymStr, I) : loadMonth(kind, ymStr).then(opravRecs).then(posunRecs)).finally(() => inflight.delete(k));
   inflight.set(k, p); return p;
 }
 async function loadMonth(kind, ymStr) {
@@ -677,7 +724,7 @@ const rain5 = async d => { const x = await dayDetail(d); return x ? x.hours : nu
 // podrobná měření dne: hodinové srážky a přesné časy maxim a minim
 function dayDetail(d) {
   if (r5inflight.has(d)) return r5inflight.get(d);
-  const p = rain5load(d).then(res => ecoFine(d, res)).then(res => posunDen(d, res)).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
+  const p = rain5load(d).then(res => ecoFine(d, res)).then(res => posunDen(d, res)).then(res => tlakSouhrn(d, res)).finally(() => r5inflight.delete(d)); r5inflight.set(d, p); return p;
 }
 const EXT = { temp: ['tempHigh', 'tempLow'], dew: ['dewptHigh', 'dewptLow'], hum: ['humidityHigh', 'humidityLow'], press: ['pressureMax', 'pressureMin'], wind: ['windspeedHigh', null], gust: ['windgustHigh', null], solar: ['solarRadiationHigh', null], uv: ['uvHigh', null] };
 // podrobná měření dne z úložiště dat (fine/RRRR/MM/RRRR-MM-DD.json) převedená do tvaru měření WU; null, když tam den není
@@ -691,11 +738,93 @@ async function fineRepo(d) {
   // stejné opravy jako u měření z WU (vyřazení, odečtené srážky)
   return opravSrazky(list);
 }
+// ---------- souhrny dne z pětiminutových dat ----------
+// Pro dny, které databáze ještě nemá (dnešek, ráno i včerejšek). STEJNÁ PRAVIDLA JAKO scripts/databaze.py
+// v úložišti dat – při změně pravidel upravit obě místa: maximum z nejvyšších, minimum z nejnižších a průměr
+// z průměrných hodnot měření, průměr jen při pokrytí aspoň 75 %, srážky jako součet přírůstků s vynulováním.
+const POKRYTI = 0.75;
+const SUM_HLA = { temp: ['tempHigh', 'tempLow', 'tempAvg'], dew: ['dewptHigh', 'dewptLow', 'dewptAvg'], hum: ['humidityHigh', 'humidityLow', 'humidityAvg'],
+  wind: ['windspeedHigh', 'windspeedLow', 'windspeedAvg'], gust: ['windgustHigh', 'windgustLow', 'windgustAvg'],
+  solar: ['solarRadiationHigh', 'solarRadiationHigh', 'solarRadiationHigh'], uv: ['uvHigh', 'uvHigh', 'uvHigh'] };
+// očekávaný počet pětiminutových měření v každé místní hodině dne (změny času); u dneška jen do doby před 10 minutami
+function ocekavano(d) {
+  const a = parseYmd(d), b = addDays(a, 1), now = Date.now() - 600e3, hod = new Array(24).fill(0);
+  for (let t = a.getTime(); t < b.getTime() && t <= now; t += 300e3) hod[new Date(t).getHours()]++;
+  return hod;
+}
+const neupl = (z, v, n, o) => { if (n && o && n / o < POKRYTI) z.neupl = { ...(z.neupl || {}), [v]: Math.round(Math.min(n / o, 1) * 100) }; };
+function souhrnSkupiny(rows, o) {
+  const z = {};
+  for (const [v, [ch, cl, ca]] of Object.entries(SUM_HLA)) {
+    const hi = rows.map(r => r.g(ch)).filter(x => x != null), lo = rows.map(r => r.g(cl)).filter(x => x != null), av = rows.map(r => r.g(ca)).filter(x => x != null);
+    if (!hi.length && !lo.length && !av.length) { z[v] = [null, null, null]; continue; }
+    z[v] = [hi.length ? r2(Math.max(...hi)) : null, lo.length ? r2(Math.min(...lo)) : null, av.length && av.length / o >= POKRYTI ? r2(av.reduce((a, b) => a + b, 0) / av.length) : null];
+    neupl(z, v, av.length, o);
+  }
+  const dr = rows.map(r => r.g('winddirAvg')).filter(x => x != null);
+  const sx = dr.reduce((a, x) => a + Math.sin(x * Math.PI / 180), 0), cx = dr.reduce((a, x) => a + Math.cos(x * Math.PI / 180), 0);
+  z.dir = dr.length && (Math.abs(sx) > 1e-9 || Math.abs(cx) > 1e-9) ? Math.round(((Math.atan2(sx, cx) * 180 / Math.PI) + 360) % 360) : null;
+  z.n = rows.length;
+  return z;
+}
+function souhrnZObs(d, obs) {
+  const rows = [];
+  for (const o of obs) {
+    const t = String(o.obsTimeLocal || ''); if (!t.startsWith(d)) continue;
+    const mi = Number(t.slice(11, 13)) * 60 + Number(t.slice(14, 16)); if (!(mi >= 0 && mi < 1440)) continue;
+    const m = o.metric || {}; rows.push({ mi, g: f => num(m[f] ?? o[f]) });
+  }
+  if (!rows.length) return null;
+  rows.sort((a, b) => a.mi - b.mi);
+  // srážky: přírůstky úhrnu; vynulování počítadla je jen pokles na nulu, po kterém se úhrn do 60 minut nevrátí
+  const pts = rows.map(r => [r.mi, r.g('precipTotal')]).filter(x => x[1] != null), inc = [];
+  let prev = null;
+  pts.forEach(([m, v], i) => {
+    if (prev == null) { inc.push([m, v]); prev = v; return; }
+    if (v >= prev - 1e-9) { inc.push([m, r2(v - prev)]); prev = v; return; }
+    if (v > 1e-9 || pts.slice(i + 1).some(([m2, v2]) => m2 - m <= 60 && v2 >= prev - 1e-9)) return;
+    inc.push([m, v]); prev = v;
+  });
+  const oprR = new Set();
+  for (const k of srazkyOpr().filter(k => k.den === d)) {
+    const [hh, mm] = (k.od || '00:00').split(':').map(Number); let zb = k.mm;
+    inc.forEach((x, j) => { if (x[0] < hh * 60 + mm || zb <= 0 || x[1] <= 0) return; const u = Math.min(x[1], zb); inc[j] = [x[0], r2(x[1] - u)]; zb = r2(zb - u); oprR.add(Math.floor(x[0] / 60)); });
+  }
+  const oc = ocekavano(d), nR = rows.filter(r => r.g('precipTotal') != null), hours = [];
+  let rc = 0;
+  for (let h = 0; h < 24; h++) {
+    const ro = rows.filter(r => Math.floor(r.mi / 60) === h), ih = inc.filter(x => Math.floor(x[0] / 60) === h);
+    rc = r2(rc + ih.reduce((a, x) => a + x[1], 0));
+    if (!ro.length || !oc[h]) continue;
+    const z = { h, ...souhrnSkupiny(ro, oc[h]) }, nr = ro.filter(r => r.g('precipTotal') != null).length;
+    z.rain = nr ? r2(ih.reduce((a, x) => a + x[1], 0)) : null; z.rc = rc; neupl(z, 'rain', nr, oc[h]);
+    if (oprR.has(h)) z.opr = ['rain'];
+    hours.push(z);
+  }
+  const O = oc.reduce((a, b) => a + b, 0), day = souhrnSkupiny(rows, O);
+  day.rain = nR.length ? r2(inc.reduce((a, x) => a + x[1], 0)) : null; day.rc = day.rain; neupl(day, 'rain', nR.length, O);
+  if (oprR.size) day.opr = ['rain'];
+  return { hours, day };
+}
+// tlak do souhrnů až po Ecowittu a posunech (z jemné řady dne)
+function tlakSouhrn(d, res) {
+  if (!res || !res.sum || !res.fine) return res;
+  const F = res.fine, T = F.tp || F.t, P = F.v.press || [], fl = !F.tp && F.opr ? F.opr.press : null, oc = ocekavano(d);
+  const by = Array.from({ length: 24 }, () => []), oh = new Set();
+  T.forEach((t, i) => { if (P[i] == null) return; const h = Math.floor(t / 60); by[h].push(P[i]); if (fl && fl[i]) oh.add(h); });
+  const tri = (xs, o) => xs.length ? [r2(Math.max(...xs)), r2(Math.min(...xs)), xs.length / o >= POKRYTI ? r2(xs.reduce((a, b) => a + b, 0) / xs.length) : null] : [null, null, null];
+  const znac = (z, xs, o, op) => { z.press = tri(xs, o); neupl(z, 'press', xs.length, o); if (op) z.opr = [...new Set([...(z.opr || []), 'press'])]; return z; };
+  const hours = res.sum.hours.map(z => znac({ ...z, neupl: z.neupl ? { ...z.neupl } : undefined }, by[z.h], oc[z.h], oh.has(z.h)));
+  hours.forEach(z => { if (!z.neupl) delete z.neupl; });
+  const day = znac({ ...res.sum.day, neupl: res.sum.day.neupl ? { ...res.sum.day.neupl } : undefined }, by.flat(), oc.reduce((a, b) => a + b, 0), oh.size > 0);
+  if (!day.neupl) delete day.neupl;
+  return { ...res, sum: { hours, day } };
+}
 async function rain5load(d) {
   const key = 'day5d/' + d, e = await idb.get(key), isToday = d === ymd(today());
   // dnešní podrobná data se stahují při každém obnovení (každých 5 minut)
   // den z úložiště platí trvale; den z WU (dřív stažený nebo v úložišti ještě nebyl) se po čase zkusí vzít z úložiště
-  if (e && (e.src === 'fine' || (e.final && !gh.ready()) || Date.now() - e.fetchedAt < (isToday ? 4 * 60e3 : e.final ? 6 * 3600e3 : STALE))) return e;
+  if (e && e.sv === 2 && (e.src === 'fine' || (e.final && !gh.ready()) || Date.now() - e.fetchedAt < (isToday ? 4 * 60e3 : e.final ? 6 * 3600e3 : STALE))) return e;
   setBusy(1);
   try {
     // u dneška bývá historie neúplná, proto se doplní měřeními za posledních 24 hodin
@@ -746,7 +875,7 @@ async function rain5load(d) {
       fine.v.press.push(pmx != null && pmn != null ? (pmx + pmn) / 2 : (pmx ?? pmn ?? g('pressure')));
     }
     const final = Date.now() > addDays(parseYmd(d), 1).getTime() + 3600e3;
-    const res = { final, src, fetchedAt: Date.now(), hours, ext, fine };
+    const res = { sv: 2, final, src, fetchedAt: Date.now(), hours, ext, fine, sum: souhrnZObs(d, obs) };
     await idb.set(key, res);
     return res;
   } catch (err) { note('Podrobná měření: ' + err.message); return e || null; }
@@ -1211,7 +1340,9 @@ function drawChart(el, o) {
         const x = two ? (k === 0 ? xc(i) - w - 0.5 : xc(i) + 0.5) : xc(i) - w / 2;
         const ww = !two && o.partial && o.partial.i === i ? Math.max(1, w * o.partial.frac) : w;
         const op = se.opr && se.opr[i];
-        s += `<rect x="${f1(x)}" y="${f1(top)}" width="${f1(ww)}" height="${f1(base - top)}" rx="${Math.min(2, w / 3)}" fill="url(#${op ? 'h' : 'g'}${k === 0 ? 'A' : 'B'})"/>`;
+        // neúplná data: jen obrys sloupce
+        if (se.neupl && se.neupl[i]) s += `<rect x="${f1(x + 0.6)}" y="${f1(top + 0.6)}" width="${f1(Math.max(0.5, ww - 1.2))}" height="${f1(Math.max(0.5, base - top - 1.2))}" rx="${Math.min(2, w / 3)}" fill="none" stroke="${k === 0 ? '#1D8FE0' : '#C2410C'}" stroke-width="1.2"/>`;
+        else s += `<rect x="${f1(x)}" y="${f1(top)}" width="${f1(ww)}" height="${f1(base - top)}" rx="${Math.min(2, w / 3)}" fill="url(#${op ? 'h' : 'g'}${k === 0 ? 'A' : 'B'})"/>`;
       });
     });
     if (lab) {
@@ -1484,9 +1615,12 @@ async function refresh() {
   const needH = st.scale === 'day' || st.scale === 'week';
   const load = async p => {
     const wantDet = st.scale === 'day' && p.s <= today();
-    const [h, d, det] = await Promise.all([needH ? getRange('hourly', p.s, p.e).then(x => st.v === 'rain' ? applyRain5(x) : x) : [], getRange('daily', p.s, p.e),
+    // s databází jsou srážky po hodinách, tlak z Ecowittu i opravy už v datech
+    const db = !!(await dbIdx());
+    if (db) rainSrc = '';
+    const [h, d, det] = await Promise.all([needH ? getRange('hourly', p.s, p.e).then(x => !db && st.v === 'rain' ? applyRain5(x) : x) : [], getRange('daily', p.s, p.e),
       wantDet ? dayDetail(ymd(p.s)).catch(() => null) : null]);
-    await ecoPatch(h, d);
+    if (!db) await ecoPatch(h, d);
     return { p, h, d, ext: det && det.ext ? det.ext : null, fine: det && det.fine && det.fine.t.length ? det.fine : null };
   };
   setBusy(1);
@@ -1560,8 +1694,8 @@ function chartOpts(a, b) {
   const n = Math.max(a.Bk.length, b ? b.Bk.length : 0);
   const padTo = arr => { const r = arr.slice(); while (r.length < n) r.push(null); return r; };
   const ax = xAxis(st.scale, type, b && b.Bk.length > a.Bk.length ? b.Bk : a.Bk);
-  const series = [{ opr: padTo(a.opr || []), vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' && st.scale !== 'week' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
-  if (b) series.push({ opr: padTo(b.opr || []), vals: padTo(b.vals.map(x => x.val)) });
+  const series = [{ opr: padTo(a.opr || []), neupl: padTo(a.neupl || []), vals: padTo(a.vals.map(x => x.val)), band: !b && type === 'line' && V.kind === 'hla' && st.scale !== 'week' ? padTo(a.vals.map(x => x.hi == null ? null : [x.hi, V.noMin ? x.avg : x.lo])) : null }];
+  if (b) series.push({ opr: padTo(b.opr || []), neupl: padTo(b.neupl || []), vals: padTo(b.vals.map(x => x.val)) });
   const wv = st.v === 'wind' || st.v === 'gust';
   const o = { type, n, series, icons: st.scale === 'day' && !b && !wv ? iconRow() : null, arrows: st.scale === 'day' && !b && wv ? windRow() : null, bft: st.v === 'wind', thin: st.v === 'wind' || st.v === 'gust', cap: V.cap, xEdge: !!ax.edge, extra: extraVals(a, b), zero: !!V.zero, dec: V.dec, xLabel: ax.lab, xLabX: ax.labX, xGrid: ax.grid, sel: st.sel, aria: `${V.n}, ${periodLabel(model.A.p).t}` };
   if (!b && type === 'line') { o.area = st.scale === 'week'; o.tempColor = st.v === 'temp'; }
@@ -1625,10 +1759,27 @@ function chartOpts(a, b) {
     : cfg.lat == null ? 'Čekám na polohu stanice…' : 'Načítám předpověď…';
   return o;
 }
+// neúplná data (pokrytí pod 75 %): v čárovém grafu po hodinách mezera, jinak bez průměru (jen maximum a minimum);
+// ve sloupcovém grafu se průměr nekreslí a maximum / minimum je jen obrysem (drawChart podle neupl);
+// týden je neúplný, když má aspoň jeden neúplný den; měsíce v ročním sloupcovém grafu se neznačí
+function neuplVals(Bk, vals, nu) {
+  const line = chartType() === 'line', mode = curMode();
+  if (VARS[st.v].kind === 'sum') return;
+  vals.forEach((x, i) => {
+    if (!nu[i]) return;
+    if (line && Bk[i].k === 'h') { vals[i] = { val: null, hi: null, lo: null, avg: null }; return; }
+    x.avg = null; if (mode === 'avg') x.val = null;
+  });
+}
 function draw() {
   if (!model) return;
   const { A, B } = model;
-  const mk = X => { const Bk = buildBuckets(st.scale, chartType(), X.p); fillBuckets(Bk, X.h, X.d); return { Bk, vals: bucketVals(Bk, st.v, curMode()), opr: Bk.map(b => b.recs.some(r => r.opr && r.opr.includes(st.v))) }; };
+  const mk = X => {
+    const Bk = buildBuckets(st.scale, chartType(), X.p); fillBuckets(Bk, X.h, X.d);
+    const vals = bucketVals(Bk, st.v, curMode()), nu = Bk.map(b => b.k !== 'm' && b.recs.some(r => r.neupl && r.neupl[st.v] != null));
+    neuplVals(Bk, vals, nu);
+    return { Bk, vals, neupl: nu, opr: Bk.map(b => b.recs.some(r => (r.opr && r.opr.includes(st.v)) || (r.dopl && r.dopl.includes(st.v)))) };
+  };
   const a = mk(A), b = B ? mk(B) : null;
   if (st.scale === 'day' && chartType() === 'bar' && VARS[st.v].kind === 'max') { fineHours(a, A); if (b) fineHours(b, B); }
   if (!B && st.scale === 'day' && chartType() === 'bar') liveHour(a);
@@ -1766,11 +1917,6 @@ function oprPolozky(v, obdobi) {
     if (!prekryv(tms(od), tms(k.den + ' 23:59') + 59999)) continue;
     out.push({ t: tms(od), h: `<b>Srážky ${esc(cas(od))}</b> od této chvíle sníženy o ${fmt(k.mm, 1)} mm. ${esc(k.popis || k.pozn || '')}` });
   }
-  // vyřazená chybná měření, po nichž se souhrny přepočítaly (jen ta, která danou veličinu skutečně změnila)
-  for (const k of (opravene && opravene.polozky) || []) {
-    if (!(k.v || []).includes(v) || !prekryv(tms(k.od), tms(k.do) + 59999)) continue;
-    out.push({ t: tms(k.od), h: `<b>${esc(VARS[v].n)} ${esc(k.od === k.do ? cas(k.od) : rozsah(k.od, k.do))}</b> ${k.od === k.do ? 'chybné měření vyřazeno' : 'chybná měření vyřazena'}${k.nad != null ? ` (jen hodnoty nad ${fmt(k.nad, 0)}${VARS[v].u ? ' ' + VARS[v].u : ''})` : ''}, souhrny přepočteny ze zbylých měření. ${esc(k.pozn || '')}` });
-  }
   // doplněné hodnoty: [{ velicina, od, do, zdroj, popis }]
   for (const k of o.doplneni || []) {
     if (OPR_VAR[k.velicina] !== v) continue;
@@ -1786,26 +1932,15 @@ function oprSouhrn(obdobi) {
   const S = obdobi.map(p => [ymd(p.s), ymd(p.e)]), uvnitr = d => S.some(([a, b]) => d >= a && d < b);
   const pridej = (M, v, d) => { if (!VARS[v] || !uvnitr(d)) return; (M[v] = M[v] || new Set()).add(d); };
   const useky = (M, v, od, dd) => { for (let d = parseYmd(od.slice(0, 10)), e = parseYmd(dd.slice(0, 10)); d <= e; d = addDays(d, 1)) pridej(M, v, ymd(d)); };
-  if (opravene) {
-    for (const [d, z] of Object.entries(opravene.dny || {})) for (const v of Object.keys(z)) pridej(upr, v, d);
-    for (const [k, z] of Object.entries(opravene.hodiny || {})) for (const v of Object.keys(z)) pridej(upr, v, k.slice(0, 10));
+  if (dbOn() && model) {
+    // podle značek v záznamech databáze (jen opravy a doplnění, vyřazení se neznačí)
+    for (const X of [model.A, model.B]) if (X) for (const r of X.d) { for (const v of r.opr || []) pridej(upr, v, r.d); for (const v of r.dopl || []) pridej(dop, v, r.d); }
+  } else {
+    for (const k of o.posun || []) if (k.velicina === 'tlak') for (const [a, b] of k.useky || [[k.od, k.do]]) useky(upr, 'press', a, b);
+    for (const k of o.srazky || []) pridej(upr, 'rain', k.den);
+    for (const k of o.doplneni || []) if (OPR_VAR[k.velicina]) useky(dop, OPR_VAR[k.velicina], k.od, k.do);
   }
-  for (const k of o.posun || []) if (k.velicina === 'tlak') for (const [a, b] of k.useky || [[k.od, k.do]]) useky(upr, 'press', a, b);
-  for (const k of o.srazky || []) pridej(upr, 'rain', k.den);
-  for (const k of o.doplneni || []) if (OPR_VAR[k.velicina]) useky(dop, OPR_VAR[k.velicina], k.od, k.do);
-  const roky = new Set(obdobi.map(p => p.s.getFullYear())).size > 1;
-  // souvislé dny se slučují: „5.–8. 4.“, přes hranici měsíce „30. 6. – 2. 7.“
-  const dny = set => {
-    const D = [...set].sort(), out = [];
-    const t = (d, mes = true) => `${d.getDate()}.${mes ? ` ${d.getMonth() + 1}.` : ''}${mes && roky ? ' ' + d.getFullYear() : ''}`;
-    for (let i = 0; i < D.length;) {
-      let j = i; while (j + 1 < D.length && ymd(addDays(parseYmd(D[j]), 1)) === D[j + 1]) j++;
-      const a = parseYmd(D[i]), b = parseYmd(D[j]);
-      out.push(i === j ? t(a) : a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear() ? `${a.getDate()}.–${t(b)}` : `${t(a)} – ${t(b)}`);
-      i = j + 1;
-    }
-    return out.join(', ');
-  };
+  const dny = set => dnyText(set, new Set(obdobi.map(p => p.s.getFullYear())).size > 1);
   const out = [];
   for (const v of VAR_ORDER) {
     const c = [];
@@ -1815,15 +1950,49 @@ function oprSouhrn(obdobi) {
   }
   return out;
 }
+// souvislé dny se slučují: „5.–8. 4.“, přes hranici měsíce „30. 6. – 2. 7.“
+function dnyText(set, roky) {
+  {
+    const D = [...set].sort(), out = [];
+    const t = (d, mes = true) => `${d.getDate()}.${mes ? ` ${d.getMonth() + 1}.` : ''}${mes && roky ? ' ' + d.getFullYear() : ''}`;
+    for (let i = 0; i < D.length;) {
+      let j = i; while (j + 1 < D.length && ymd(addDays(parseYmd(D[j]), 1)) === D[j + 1]) j++;
+      const a = parseYmd(D[i]), b = parseYmd(D[j]);
+      out.push(i === j ? t(a) : a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear() ? `${a.getDate()}.–${t(b)}` : `${t(a)} – ${t(b)}`);
+      i = j + 1;
+    }
+    return out.join(', ');
+  }
+}
+// neúplná data zobrazené veličiny (pokrytí pod 75 %): dny s pokrytím, v denním pohledu i hodiny; v ročním jen dny
+function neuplHtml() {
+  if (!model || !dbOn()) return '';
+  const v = st.v, dny = [], hod = [];
+  for (const X of [model.A, model.B]) if (X) {
+    for (const r of X.d) if (r.neupl && r.neupl[v] != null && r.d >= ymd(X.p.s) && r.d < ymd(X.p.e)) dny.push([r.d, r.neupl[v]]);
+    if (st.scale === 'day') for (const r of X.h) if (r.neupl && r.neupl[v] != null) hod.push(r.h);
+  }
+  if (!dny.length && !hod.length) return '';
+  const roky = model.B ? model.A.p.s.getFullYear() !== model.B.p.s.getFullYear() : false;
+  const dt = d => { const x = parseYmd(d); return `${x.getDate()}. ${x.getMonth() + 1}.${roky || st.scale === 'year' ? '' : ''}`; };
+  let t;
+  if (st.scale === 'year') t = 'Neúplné dny: ' + dnyText(new Set(dny.map(x => x[0])), roky);
+  else {
+    t = dny.length ? 'Neúplné dny: ' + dny.map(([d, p]) => `${dt(d)} (${p} %)`).join(', ') : '';
+    if (hod.length) t += (t ? '; ' : '') + 'neúplné hodiny: ' + [...new Set(hod)].sort((a, b) => a - b).join(', ') + ' h';
+  }
+  const ico = '<svg width="14" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="11" height="11" rx="2" fill="none" stroke="#1D8FE0" stroke-width="1.2"/></svg>';
+  return `<div class="opr"><h3>Neúplná data v tomto období</h3><p>${ico}<span>${esc(t)}. Průměr se z neúplných dat nepočítá (méně než 75 % měření).</span></p></div>`;
+}
 function oprHtml() {
   if (!model) return '';
   const obd = [model.A.p, ...(model.B ? [model.B.p] : [])];
   const L = st.scale === 'year' ? oprSouhrn(obd) : oprPolozky(st.v, obd);
-  if (!L.length) return '';
+  if (!L.length) return neuplHtml();
   const ico = chartType() === 'bar'
     ? '<svg width="14" height="14" aria-hidden="true"><defs>' + HATCH_DEFS + '</defs><rect x="1" y="1" width="12" height="12" rx="2" fill="url(#hA)"/></svg>'
     : '<svg width="22" height="12" aria-hidden="true"><line x1="1" y1="6" x2="21" y2="6" stroke="#10A9C4" stroke-width="2.4" stroke-dasharray="' + OPR_DASH + '"/></svg>';
-  return `<div class="opr"><h3>Opravy a doplnění v tomto období</h3>${L.map(x => `<p>${ico}<span>${x.h}</span></p>`).join('')}</div>`;
+  return `<div class="opr"><h3>Opravy a doplnění v tomto období</h3>${L.map(x => `<p>${ico}<span>${x.h}</span></p>`).join('')}</div>` + neuplHtml();
 }
 const DIRS = ['S', 'SV', 'V', 'JV', 'J', 'JZ', 'Z', 'SZ'];
 function renderCurrent() {
