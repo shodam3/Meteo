@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 86;
+const APP_VERSION = 87;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1906,6 +1906,7 @@ function renderSummary() {
 }
 
 // vysvětlení oprav a doplnění, které zasahují do zobrazeného období (jen pro zobrazenou veličinu; vyřazené hodnoty se neuvádějí)
+const RADY = { 'CHMI-11450': 'ze stanice ČHMÚ Plzeň-Mikulka', ERA5: 'z modelu ERA5' };
 const VAR_NAZEV = Object.fromEntries(Object.entries(OPR_VAR).map(([k, v]) => [v, k]));
 function oprPolozky(v, obdobi) {
   const out = [], o = opravy || {};
@@ -1930,11 +1931,21 @@ function oprPolozky(v, obdobi) {
     out.push({ t: tms(od), h: `<b>Srážky ${esc(cas(od))}</b> od této chvíle sníženy o ${fmt(k.mm, 1)} mm. ${esc(k.popis || k.pozn || '')}` });
   }
   // doplněné hodnoty: [{ velicina, od, do, zdroj, popis }]
+  // dlouhé řady (Mikulka, ERA5) mají v opravách celé roky; vypíší se jen dny, kde databáze hodnoty opravdu doplnila
+  // a které nepokrývá dřívější doplnění (to má přednost)
+  const dnyDopl = new Set();
+  if (model) for (const X of [model.A, model.B]) if (X) for (const r of X.d || []) if (r.dopl && r.dopl.includes(v)) dnyDopl.add(r.d);
+  const vice = new Set(obdobi.map(p => p.s.getFullYear())).size > 1;
+  const pred = [];
   for (const k of o.doplneni || []) {
     if (OPR_VAR[k.velicina] !== v) continue;
-    const od = celyCas(k.od), dd = celyCas(k.do, true);
-    if (!prekryv(tms(od), tms(dd) + 59999)) continue;
-    out.push({ t: tms(od), h: `<b>${esc(k.velicina[0].toUpperCase() + k.velicina.slice(1))} ${esc(rozsah(od, dd))}</b> doplněno${k.zdroj ? ' ze stanice ' + esc(k.zdroj) : ''}. ${esc(k.popis || '')}` });
+    const od = celyCas(k.od), dd = celyCas(k.do, true), nazev = esc(k.velicina[0].toUpperCase() + k.velicina.slice(1));
+    if (!prekryv(tms(od), tms(dd) + 59999)) { pred.push([od, dd]); continue; }
+    if (RADY[k.zdroj]) {
+      const dny = [...dnyDopl].filter(d => d >= od.slice(0, 10) && d <= dd.slice(0, 10) && !pred.some(([a, b]) => d >= a.slice(0, 10) && d <= b.slice(0, 10)));
+      if (dny.length) out.push({ t: tms(dny.sort()[0] + ' 00:00'), h: `<b>${nazev} ${esc(dnyText(new Set(dny), vice))}</b> doplněno ${RADY[k.zdroj]}. ${esc(k.popis || '')}` });
+    } else out.push({ t: tms(od), h: `<b>${nazev} ${esc(rozsah(od, dd))}</b> doplněno${k.zdroj ? ' ze stanice ' + esc(k.zdroj) : ''}. ${esc(k.popis || '')}` });
+    pred.push([od, dd]);
   }
   return out.sort((a, b) => a.t - b.t);
 }
