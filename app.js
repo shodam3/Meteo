@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 81;
+const APP_VERSION = 82;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -1628,7 +1628,7 @@ async function refresh() {
   const ph = setTimeout(() => {
     if (my !== seq) return;
     model = null; current = null;
-    $('chart').innerHTML = '<div class="empty">Načítám data…<br>Starší období se stahují z Weather Underground, může to chvíli trvat.</div>';
+    $('chart').innerHTML = '<div class="empty">Načítám data…</div>';
     $('summary').innerHTML = ''; $('info').innerHTML = '';
   }, 250);
   try {
