@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 82;
+const APP_VERSION = 83;
 let rainSrc = '';
 /* Meteostanice – grafy z Weather Underground, data se ukládají v telefonu a volitelně do soukromého repozitáře na GitHubu. */
 
@@ -398,7 +398,7 @@ function posunDen(d, res) {
   if (!res || !res.fine) return res;
   const L = posunList().filter(p => d >= p.d0 && d <= p.d1), sr = srazkyOpr().filter(k => k.den === d);
   if (!L.length && !sr.length) return res;
-  const F = res.fine, opr = {}, v = { ...F.v };
+  const F = res.fine, opr = { ...(F.opr || {}) }, v = { ...F.v };
   if (L.length && F.v.press) {
     const fl = [];
     v.press = F.v.press.map((x, i) => { const o = posunAt(tms(`${d} ${hhmm(F.t[i]).padStart(5, '0')}`), L); fl.push(o != null); return o == null ? x : posunVal(x, o); });
@@ -728,10 +728,11 @@ function dayDetail(d) {
 }
 const EXT = { temp: ['tempHigh', 'tempLow'], dew: ['dewptHigh', 'dewptLow'], hum: ['humidityHigh', 'humidityLow'], press: ['pressureMax', 'pressureMin'], wind: ['windspeedHigh', null], gust: ['windgustHigh', null], solar: ['solarRadiationHigh', null], uv: ['uvHigh', null] };
 // podrobná měření dne z úložiště dat (fine/RRRR/MM/RRRR-MM-DD.json) převedená do tvaru měření WU; null, když tam den není
-async function fineRepo(d) {
+// u dnů s doplněním ze sousední stanice se bere jejich pětiminutová řada z databáze (db/pet/, sloupec „dopl“)
+async function fineRepo(d, pet) {
   if (!gh.ready()) return null;
   let j;
-  try { j = await gh.getFile(`fine/${d.slice(0, 4)}/${d.slice(5, 7)}/${d}.json`); } catch (err) { note('Podrobná měření z úložiště: ' + err.message); return null; }
+  try { j = await gh.getFile(`${pet ? 'db/pet' : 'fine'}/${d.slice(0, 4)}/${d.slice(5, 7)}/${d}.json`); } catch (err) { note('Podrobná měření z úložiště: ' + err.message); return null; }
   if (!j || !Array.isArray(j.sloupce) || !Array.isArray(j.radky)) return null;
   const c = j.sloupce, ic = c.indexOf('cas');
   const list = j.radky.map(r => { const m = {}; c.forEach((k, i) => { if (i !== ic) m[k] = r[i]; }); return { obsTimeLocal: `${d} ${r[ic]}`, metric: m }; });
@@ -824,14 +825,17 @@ async function rain5load(d) {
   const key = 'day5d/' + d, e = await idb.get(key), isToday = d === ymd(today());
   // dnešní podrobná data se stahují při každém obnovení (každých 5 minut)
   // den z úložiště platí trvale; den z WU (dřív stažený nebo v úložišti ještě nebyl) se po čase zkusí vzít z úložiště
-  if (e && e.sv === 2 && (e.src === 'fine' || (e.final && !gh.ready()) || Date.now() - e.fetchedAt < (isToday ? 4 * 60e3 : e.final ? 6 * 3600e3 : STALE))) return e;
+  const petOt = dbIndex && dbIndex.pet ? dbIndex.pet[d] : null;
+  if (e && e.sv === 2 && (petOt ? e.src === 'pet' && e.otisk === petOt : e.src === 'fine') ) return e;
+  if (e && e.sv === 2 && !petOt && ( (e.final && !gh.ready()) || Date.now() - e.fetchedAt < (isToday ? 4 * 60e3 : e.final ? 6 * 3600e3 : STALE))) return e;
   setBusy(1);
   try {
     // u dneška bývá historie neúplná, proto se doplní měřeními za posledních 24 hodin
     let obs = [];
     // starší dny se berou z úložiště dat (fine/, noční stahování); z WU jen dnešek a dny, které tam ještě nejsou
     let src = 'wu';
-    if (!isToday) { obs = await fineRepo(d); if (obs) src = 'fine'; }
+    if (!isToday && petOt) { obs = await fineRepo(d, true); if (obs) src = 'pet'; }
+    if (!isToday && !obs) { obs = await fineRepo(d); if (obs) src = 'fine'; }
     if (!isToday && obs == null) obs = await wuGet('history/all', { date: d.replace(/-/g, '') });
     if (isToday) {
       let x = [];
@@ -865,6 +869,7 @@ async function rain5load(d) {
     // jemná řada pro čárový graf dne: minuty od půlnoci a hodnoty (průměr za interval, u nárazů, záření a UV maximum, u srážek úhrn od půlnoci)
     const FINE = { temp: ['tempAvg', 'temp'], dew: ['dewptAvg', 'dewpt'], hum: ['humidityAvg', 'humidity'], wind: ['windspeedAvg', 'windSpeed'], gust: ['windgustHigh', 'windGust'], solar: ['solarRadiationHigh', 'solarRadiation'], uv: ['uvHigh', 'uv'], rain: ['precipTotal'], dir: ['winddirAvg', 'winddir'] };
     const fine = { t: [], v: Object.fromEntries([...Object.keys(FINE), 'press'].map(k => [k, []])) };
+    const DOPL = ['temp', 'dew', 'hum', 'press'], dopl = Object.fromEntries(DOPL.map(k => [k, []]));
     for (const o of obs) {
       const t = String(o.obsTimeLocal || ''); if (!t.startsWith(d)) continue;
       const mi = Number(t.slice(11, 13)) * 60 + Number(t.slice(14, 16)); if (!(mi >= 0 && mi < 1440)) continue;
@@ -873,9 +878,13 @@ async function rain5load(d) {
       for (const [k, fs] of Object.entries(FINE)) { let v = null; for (const f of fs) { v = g(f); if (v != null) break; } fine.v[k].push(v); }
       const pmx = g('pressureMax'), pmn = g('pressureMin');
       fine.v.press.push(pmx != null && pmn != null ? (pmx + pmn) / 2 : (pmx ?? pmn ?? g('pressure')));
+      const dp = String(m.dopl || '').split(','); DOPL.forEach(k => dopl[k].push(dp.includes(k)));
     }
+    // doplněné hodnoty se v grafu dne vyznačí jako opravy a doplnění
+    const op = Object.fromEntries(DOPL.filter(k => dopl[k].some(Boolean)).map(k => [k, dopl[k]]));
+    if (Object.keys(op).length) fine.opr = op;
     const final = Date.now() > addDays(parseYmd(d), 1).getTime() + 3600e3;
-    const res = { sv: 2, final, src, fetchedAt: Date.now(), hours, ext, fine, sum: souhrnZObs(d, obs) };
+    const res = { sv: 2, final, src, otisk: src === 'pet' ? petOt : undefined, fetchedAt: Date.now(), hours, ext, fine, sum: souhrnZObs(d, obs) };
     await idb.set(key, res);
     return res;
   } catch (err) { note('Podrobná měření: ' + err.message); return e || null; }
